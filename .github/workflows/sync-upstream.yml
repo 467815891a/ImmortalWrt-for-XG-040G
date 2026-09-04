@@ -48,16 +48,14 @@ jobs:
           else
             LOCAL_ROOT=$(git rev-list --max-parents=0 HEAD | head -n1)
             LOCAL_ROOT_TREE=$(git rev-parse "${LOCAL_ROOT}^{tree}")
-            MATCHING_UPSTREAM_ROOT=""
-            while read -r ROOT; do
-              if [ "$(git rev-parse "${ROOT}^{tree}")" = "$LOCAL_ROOT_TREE" ]; then
-                MATCHING_UPSTREAM_ROOT=$ROOT
-                break
-              fi
-            done < <(git rev-list --max-parents=0 upstream/master)
+            # The local orphan root was created from an upstream snapshot that may be a
+            # merge commit (which has parents and is therefore NOT a root commit), so
+            # search ALL upstream commits by tree hash instead of only --max-parents=0 roots.
+            MATCHING_UPSTREAM=$(git log upstream/master --format='%T %H' \
+              | awk -v t="$LOCAL_ROOT_TREE" '$1==t{print $2; exit}')
 
-            if [ -n "$MATCHING_UPSTREAM_ROOT" ]; then
-              echo "Repository histories were rewritten; rebasing local commits from ${LOCAL_ROOT:0:7} onto upstream ${REMOTE:0:7}."
+            if [ -n "$MATCHING_UPSTREAM" ]; then
+              echo "Repository histories were rewritten; rebasing local commits from ${LOCAL_ROOT:0:7} (matched upstream ${MATCHING_UPSTREAM:0:7}) onto upstream ${REMOTE:0:7}."
               echo "has_updates=true" >> "$GITHUB_OUTPUT"
               echo "mode=rebase" >> "$GITHUB_OUTPUT"
               echo "base=$LOCAL_ROOT" >> "$GITHUB_OUTPUT"

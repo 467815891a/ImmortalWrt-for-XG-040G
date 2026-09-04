@@ -32,7 +32,6 @@ jobs:
 
       - name: Generate build version
         id: version
-        shell: bash
         run: |
           git remote add upstream https://github.com/immortalwrt/immortalwrt.git 2>/dev/null || true
           git remote set-url upstream https://github.com/immortalwrt/immortalwrt.git
@@ -42,12 +41,12 @@ jobs:
           repo_commit=$(git rev-parse --short=10 HEAD)
           upstream_base=$(git merge-base HEAD upstream/master)
           upstream_commit=$(git rev-parse --short=10 "$upstream_base")
-          version="xg2010g-${build_time}-${repo_commit}-${upstream_commit}"
+          version="naoki66-${build_time}-${repo_commit}-${upstream_commit}"
 
-          echo "date=${build_time%%-*}" >> "$GITHUB_OUTPUT"
-          echo "repo_commit=$repo_commit" >> "$GITHUB_OUTPUT"
-          echo "upstream_commit=$upstream_commit" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "date=${build_time%%-*}" >> $GITHUB_OUTPUT
+          echo "repo_commit=$repo_commit" >> $GITHUB_OUTPUT
+          echo "upstream_commit=$upstream_commit" >> $GITHUB_OUTPUT
+          echo "version=$version" >> $GITHUB_OUTPUT
           echo "Build version: $version"
 
       - name: Setup build environment
@@ -64,17 +63,12 @@ jobs:
 
       - name: Configure
         run: |
-          make defconfig
+          cp config.seed .config
           sed -i -e '/^CONFIG_VERSION_DIST=/d' \
                  -e '/^# CONFIG_VERSION_DIST is not set$/d' \
                  -e '/^CONFIG_VERSION_NUMBER=/d' \
                  -e '/^# CONFIG_VERSION_NUMBER is not set$/d' .config
-          cat >> .config <<'EOF'
-          CONFIG_TARGET_airoha=y
-          CONFIG_TARGET_airoha_an7581=y
-          CONFIG_TARGET_DEVICE_airoha_an7581_gemtek_xg2010g=y
-          EOF
-          echo 'CONFIG_VERSION_DIST="ImmortalWrt XG2010G"' >> .config
+          echo 'CONFIG_VERSION_DIST="ImmortalWrt naoki66"' >> .config
           echo 'CONFIG_VERSION_NUMBER="${{ steps.version.outputs.version }}"' >> .config
           make defconfig
 
@@ -84,7 +78,6 @@ jobs:
       - name: Build Firmware
         shell: bash
         run: |
-          set -o pipefail
           make -j2 world 2>&1 | tee build.log
 
       - name: Check build status
@@ -97,6 +90,10 @@ jobs:
           ls -la bin/targets/airoha/an7581/ 2>/dev/null || echo "No files found in an7581 directory"
           echo "=== List all files in bin/targets/airoha/ ==="
           ls -la bin/targets/airoha/ 2>/dev/null || echo "No files found in airoha directory"
+          echo "=== List all files in bin/targets/ ==="
+          ls -la bin/targets/ 2>/dev/null || echo "No files found in targets directory"
+          echo "=== List all files in bin/ ==="
+          ls -la bin/ 2>/dev/null || echo "No files found in bin directory"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
