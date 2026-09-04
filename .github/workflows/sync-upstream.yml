@@ -51,8 +51,15 @@ jobs:
             # The local orphan root was created from an upstream snapshot that may be a
             # merge commit (which has parents and is therefore NOT a root commit), so
             # search ALL upstream commits by tree hash instead of only --max-parents=0 roots.
-            MATCHING_UPSTREAM=$(git log upstream/master --format='%T %H' \
-              | awk -v t="$LOCAL_ROOT_TREE" '$1==t{print $2; exit}')
+            # Read via process substitution instead of a pipe: the early break must not
+            # kill git log with SIGPIPE (exit 141) under `set -e -o pipefail`.
+            MATCHING_UPSTREAM=""
+            while read -r TREE HASH; do
+              if [ "$TREE" = "$LOCAL_ROOT_TREE" ]; then
+                MATCHING_UPSTREAM=$HASH
+                break
+              fi
+            done < <(git log upstream/master --format='%T %H')
 
             if [ -n "$MATCHING_UPSTREAM" ]; then
               echo "Repository histories were rewritten; rebasing local commits from ${LOCAL_ROOT:0:7} (matched upstream ${MATCHING_UPSTREAM:0:7}) onto upstream ${REMOTE:0:7}."
