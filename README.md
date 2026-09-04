@@ -21,6 +21,7 @@
 ## 端口与启动注意事项
 
 - 原厂 NAND 布局与本项目 UBI 布局不同。刷写前备份 `bootloader`、`uenv`、`dsd`、`tclinux_slave` 和 `art`。
+- 本项目配合 `u-boot-xg2010g` 引导，系统 UBI 位于 `0x00600000`，长度 `0x1b800000`，内部必须包含 `fit` 卷；后续系统升级只刷写 `ubi` 分区，不能覆盖 `bootloader`、`uenv`、`dsd` 或尾部 `reserved_bmt`。
 - U-Boot 可能通过 `bootflag` 在主/备系统间切换。任何升级操作都应保留可恢复的串口/TFTP/HTTP Recovery 路径。
 - XG2010G 的 PON 模式、BOSA 校准、SLIC/语音和 10G PHY 链路尚未在 ImmortalWrt 上完成实机验证。
 
