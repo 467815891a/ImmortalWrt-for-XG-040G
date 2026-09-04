@@ -31,7 +31,7 @@ jobs:
       - name: Fetch upstream
         run: git fetch upstream master
 
-      - name: Check for updates
+      - name: Check repository relationship
         id: check
         shell: bash
         run: |
@@ -40,23 +40,61 @@ jobs:
           if git merge-base --is-ancestor upstream/master HEAD; then
             echo "No updates available (upstream: ${REMOTE:0:7}, local: ${LOCAL:0:7})"
             echo "has_updates=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Updates available: ${LOCAL:0:7} -> ${REMOTE:0:7}"
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+          elif BASE=$(git merge-base HEAD upstream/master 2>/dev/null); then
+            echo "Updates available (shared base: ${BASE:0:7}, upstream: ${REMOTE:0:7})"
             echo "has_updates=true" >> "$GITHUB_OUTPUT"
+            echo "mode=merge" >> "$GITHUB_OUTPUT"
+          else
+            LOCAL_ROOT=$(git rev-list --max-parents=0 HEAD | head -n1)
+            LOCAL_ROOT_TREE=$(git rev-parse "${LOCAL_ROOT}^{tree}")
+            MATCHING_UPSTREAM_ROOT=""
+            while read -r ROOT; do
+              if [ "$(git rev-parse "${ROOT}^{tree}")" = "$LOCAL_ROOT_TREE" ]; then
+                MATCHING_UPSTREAM_ROOT=$ROOT
+                break
+              fi
+            done < <(git rev-list --max-parents=0 upstream/master)
+
+            if [ -n "$MATCHING_UPSTREAM_ROOT" ]; then
+              echo "Repository histories were rewritten; rebasing local commits from ${LOCAL_ROOT:0:7} onto upstream ${REMOTE:0:7}."
+              echo "has_updates=true" >> "$GITHUB_OUTPUT"
+              echo "mode=rebase" >> "$GITHUB_OUTPUT"
+              echo "base=$LOCAL_ROOT" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::Repository histories have no common ancestor or matching base snapshot."
+              exit 1
+            fi
           fi
 
-      - name: Merge upstream
+      - name: Integrate upstream
         if: steps.check.outputs.has_updates == 'true'
+        shell: bash
         run: |
-          git merge --no-edit upstream/master || {
-            echo "::error::Merge failed. Conflicts need manual resolution."
-            git diff --name-only --diff-filter=U
-            exit 1
-          }
+          if [ "${{ steps.check.outputs.mode }}" = "rebase" ]; then
+            git rebase --onto upstream/master "${{ steps.check.outputs.base }}" HEAD || {
+              echo "::error::Rebase failed. Conflicts need manual resolution."
+              git diff --name-only --diff-filter=U
+              git rebase --abort || true
+              exit 1
+            }
+          else
+            git merge --no-edit upstream/master || {
+              echo "::error::Merge failed. Conflicts need manual resolution."
+              git diff --name-only --diff-filter=U
+              exit 1
+            }
+          fi
 
       - name: Push to origin
         if: steps.check.outputs.has_updates == 'true'
-        run: git push origin master
+        shell: bash
+        run: |
+          if [ "${{ steps.check.outputs.mode }}" = "rebase" ]; then
+            git push --force-with-lease origin HEAD:master
+          else
+            git push origin master
+          fi
 
       - name: Show result
         if: always()
