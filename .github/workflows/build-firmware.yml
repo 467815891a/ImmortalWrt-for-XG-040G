@@ -1,42 +1,152 @@
-name: Build Firmware
+name: Build XG2010G Firmware
 
 on:
   workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release Type'
+        required: true
+        default: 'none'
+        type: choice
+        options:
+          - none
+          - release
+          - prerelease
+      release_notes:
+        description: 'Release Notes'
+        required: false
 
-permissions:
-  contents: read
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v6
         with:
-          fetch-depth: 10
-      - name: Install build dependencies
+          fetch-depth: 0
+
+      - name: Generate build version
+        id: version
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential clang gcc g++ binutils bzip2 gawk gettext git \
+          git remote add upstream https://github.com/immortalwrt/immortalwrt.git 2>/dev/null || true
+          git remote set-url upstream https://github.com/immortalwrt/immortalwrt.git
+          git fetch --no-tags upstream master
+
+          build_time=$(TZ=Asia/Shanghai date +'%Y%m%d-%H%M%S')
+          repo_commit=$(git rev-parse --short=10 HEAD)
+          upstream_base=$(git merge-base HEAD upstream/master)
+          upstream_commit=$(git rev-parse --short=10 "$upstream_base")
+          version="xg2010g-${build_time}-${repo_commit}-${upstream_commit}"
+
+          echo "date=${build_time%%-*}" >> "$GITHUB_OUTPUT"
+          echo "repo_commit=$repo_commit" >> "$GITHUB_OUTPUT"
+          echo "upstream_commit=$upstream_commit" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Build version: $version"
+
+      - name: Setup build environment
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential clang gcc g++ binutils bzip2 gawk gettext git \
             libncurses-dev libssl-dev python3 python3-setuptools rsync unzip wget xsltproc \
             zlib1g-dev file which perl sed make
+
       - name: Install feeds
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+
       - name: Configure
         run: |
           make defconfig
-          echo 'CONFIG_TARGET_airoha=y' >> .config
-          echo 'CONFIG_TARGET_airoha_an7581=y' >> .config
-          echo 'CONFIG_TARGET_DEVICE_airoha_an7581_gemtek_xg2010g=y' >> .config
+          sed -i -e '/^CONFIG_VERSION_DIST=/d' \
+                 -e '/^# CONFIG_VERSION_DIST is not set$/d' \
+                 -e '/^CONFIG_VERSION_NUMBER=/d' \
+                 -e '/^# CONFIG_VERSION_NUMBER is not set$/d' .config
+          cat >> .config <<'EOF'
+          CONFIG_TARGET_airoha=y
+          CONFIG_TARGET_airoha_an7581=y
+          CONFIG_TARGET_DEVICE_airoha_an7581_gemtek_xg2010g=y
+          EOF
+          echo 'CONFIG_VERSION_DIST="ImmortalWrt XG2010G"' >> .config
+          echo 'CONFIG_VERSION_NUMBER="${{ steps.version.outputs.version }}"' >> .config
           make defconfig
-      - name: Build
-        run: make -j2 world 2>&1 | tee build.log
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+
+      - name: Download sources
+        run: make download -j$(nproc)
+
+      - name: Build Firmware
+        shell: bash
+        run: |
+          set -o pipefail
+          make -j2 world 2>&1 | tee build.log
+
+      - name: Check build status
         if: always()
+        run: |
+          if [ -f build.log ]; then
+            tail -100 build.log
+          fi
+          echo "=== List all files in bin/targets/airoha/an7581/ ==="
+          ls -la bin/targets/airoha/an7581/ 2>/dev/null || echo "No files found in an7581 directory"
+          echo "=== List all files in bin/targets/airoha/ ==="
+          ls -la bin/targets/airoha/ 2>/dev/null || echo "No files found in airoha directory"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
         with:
           name: xg2010g-firmware
           path: |
-            bin/targets/airoha/an7581/*
             build.log
+            bin/targets/airoha/an7581/*.itb
+            bin/targets/airoha/an7581/config.buildinfo
+            bin/targets/airoha/an7581/feeds.buildinfo
+            bin/targets/airoha/an7581/version.buildinfo
+            bin/targets/airoha/an7581/sha256sums
+          retention-days: 30
+        if: always()
+
+      - name: Build release body
+        if: github.event.inputs.release_type != 'none'
+        id: release_body
+        env:
+          RELEASE_NOTES: ${{ github.event.inputs.release_notes }}
+        run: |
+          {
+            printf '%s\n' "$RELEASE_NOTES"
+            echo ""
+            echo "---"
+            echo ""
+            echo "如果您觉得对您有帮助，请我喝杯咖啡吧，让我更有动力持续更新。"
+            echo ""
+            echo '<img width="400" height="400" alt="c6ea388c976395326514814f80d512d5" src="https://github.com/user-attachments/assets/0ac90d58-ac73-4dc1-b926-276e539e5d0f" />'
+          } > /tmp/release_body.md
+          {
+            echo "body<<EOF"
+            cat /tmp/release_body.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        if: github.event.inputs.release_type != 'none'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ format('{0}-{1}', steps.version.outputs.date, steps.version.outputs.repo_commit) }}
+          name: ${{ format('{0} - XG2010G Build ({1})', steps.version.outputs.date, steps.version.outputs.repo_commit) }}
+          body: ${{ steps.release_body.outputs.body }}
+          draft: false
+          prerelease: ${{ github.event.inputs.release_type == 'prerelease' }}
+          files: |
+            bin/targets/airoha/an7581/*.itb
+            bin/targets/airoha/an7581/config.buildinfo
+            bin/targets/airoha/an7581/feeds.buildinfo
+            bin/targets/airoha/an7581/version.buildinfo
+            bin/targets/airoha/an7581/sha256sums
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
