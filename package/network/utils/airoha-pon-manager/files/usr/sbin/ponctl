@@ -16,7 +16,7 @@ xpon_10g
 
 usage() {
 	cat <<'EOF'
-Usage: ponctl <status|config|mode-map|modules|devices|links|procs|nodes|start|stop|reload>
+Usage: ponctl <status|config|mode-map|modules|devices|links|procs|nodes|apply|start|stop|reload>
 EOF
 }
 
@@ -83,7 +83,9 @@ EOF
 show_config() {
 	local mode mode_param auto_start device omci_device oam_device
 	local serial password loid loid_password
-	local llid_mask mac epon_loid epon_loid_password ctc_oam dying_gasp tx_fec
+	local llid_index llid_mask mac epon_loid epon_loid_password
+	local ctc_oam dying_gasp rx_fec tx_fec rate_mode
+	local password_format
 
 	mode="$(line_get mode auto)"
 	auto_start="$(line_get auto_start 1)"
@@ -104,30 +106,37 @@ show_config() {
 
 	serial="$(uci_get pon.line0_gpon.serial)"
 	password="$(uci_get pon.line0_gpon.password)"
+	password_format="$(uci_get pon.line0_gpon.password_format)"
 	loid="$(uci_get pon.line0_gpon.loid)"
 	loid_password="$(uci_get pon.line0_gpon.loid_password)"
 	printf 'gpon.serial=%s\n' "$(yesno_configured "$serial")"
 	printf 'gpon.password=%s\n' "$(yesno_configured "$password")"
+	printf 'gpon.password_format=%s\n' "${password_format:-ascii}"
 	printf 'gpon.loid=%s\n' "$(yesno_configured "$loid")"
 	printf 'gpon.loid_password=%s\n' "$(yesno_configured "$loid_password")"
 
+	llid_index="$(uci_get pon.line0_epon.llid_index)"
 	llid_mask="$(uci_get pon.line0_epon.llid_mask)"
 	mac="$(uci_get pon.line0_epon.mac)"
 	epon_loid="$(uci_get pon.line0_epon.loid)"
 	epon_loid_password="$(uci_get pon.line0_epon.loid_password)"
 	ctc_oam="$(uci_get pon.line0_epon.ctc_oam)"
 	dying_gasp="$(uci_get pon.line0_epon.dying_gasp)"
+	rx_fec="$(uci_get pon.line0_epon.rx_fec)"
 	tx_fec="$(uci_get pon.line0_epon.tx_fec)"
+	rate_mode="$(uci_get pon.line0_epon.rate_mode)"
+	printf 'epon.llid_index=%s\n' "${llid_index:-0}"
 	printf 'epon.llid_mask=%s\n' "$(yesno_configured "$llid_mask")"
 	printf 'epon.mac=%s\n' "$(yesno_configured "$mac")"
 	printf 'epon.loid=%s\n' "$(yesno_configured "$epon_loid")"
 	printf 'epon.loid_password=%s\n' "$(yesno_configured "$epon_loid_password")"
 	printf 'epon.ctc_oam=%s\n' "${ctc_oam:-0}"
 	printf 'epon.dying_gasp=%s\n' "${dying_gasp:-1}"
+	printf 'epon.rx_fec=%s\n' "$(yesno_configured "$rx_fec")"
 	printf 'epon.tx_fec=%s\n' "$(yesno_configured "$tx_fec")"
+	printf 'epon.rate_mode=%s\n' "$(yesno_configured "$rate_mode")"
 
-	[ -z "$serial$password$loid$loid_password$llid_mask$mac$epon_loid$epon_loid_password$tx_fec" ] || \
-		printf 'config.apply=ioctl-helper-pending\n'
+	printf 'config.apply=ponctl apply\n'
 }
 
 show_modules() {
@@ -234,7 +243,7 @@ case "$1" in
 		create_nodes
 		show_devnodes
 		;;
-	start|stop|reload)
+	apply|start|stop|reload)
 		"/etc/init.d/pon" "$1"
 		;;
 	procs)

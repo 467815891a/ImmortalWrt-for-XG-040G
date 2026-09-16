@@ -5,6 +5,8 @@ START=19
 STOP=89
 
 USE_PROCD=1
+EXTRA_COMMANDS="apply"
+EXTRA_HELP="	apply	Apply configured GPON/EPON identity and EPON MAC settings"
 
 PRE_XPON_MODULES="
 airoha_ecnt_hook
@@ -116,26 +118,59 @@ setup_links() {
 	done
 }
 
-warn_unapplied_config() {
+apply_helper() {
+	local output ret
+
+	output="$(/usr/sbin/ponctl-helper "$@" 2>&1)"
+	ret="$?"
+	[ -z "$output" ] || logger -t pon "$output"
+	return "$ret"
+}
+
+apply_config() {
 	local serial password loid loid_password
-	local llid_mask mac epon_loid epon_loid_password tx_fec
+	local password_format
+	local llid_index llid_mask mac epon_loid epon_loid_password
+	local dying_gasp rx_fec tx_fec rate_mode
 
 	config_get serial line0_gpon serial ""
 	config_get password line0_gpon password ""
+	config_get password_format line0_gpon password_format "ascii"
 	config_get loid line0_gpon loid ""
 	config_get loid_password line0_gpon loid_password ""
 
-	[ -z "$serial$password$loid$loid_password" ] || \
-		logger -t pon "GPON identity fields are configured but vendor XMCS ioctl apply support is still pending"
+	if [ -n "$loid" ]; then
+		apply_helper gpon-loid "${serial:-"-"}" "$loid" "$loid_password" || \
+			logger -t pon "failed to apply GPON LOID settings"
+	elif [ -n "$serial$password" ]; then
+		apply_helper gpon-sn "$serial" "$password" "$password_format" || \
+			logger -t pon "failed to apply GPON SN settings"
+	fi
 
+	config_get llid_index line0_epon llid_index "0"
 	config_get llid_mask line0_epon llid_mask ""
 	config_get mac line0_epon mac ""
 	config_get epon_loid line0_epon loid ""
 	config_get epon_loid_password line0_epon loid_password ""
+	config_get dying_gasp line0_epon dying_gasp ""
+	config_get rx_fec line0_epon rx_fec ""
 	config_get tx_fec line0_epon tx_fec ""
+	config_get rate_mode line0_epon rate_mode ""
 
-	[ -n "$llid_mask$mac$epon_loid$epon_loid_password$tx_fec" ] || return 0
-	logger -t pon "EPON management fields are configured but vendor EPON ioctl apply support is still pending"
+	[ -z "$epon_loid" ] || apply_helper epon-loid "$epon_loid" "$epon_loid_password" || \
+		logger -t pon "failed to apply EPON LOID settings"
+	[ -z "$llid_mask" ] || apply_helper epon-llid-mask "$llid_mask" || \
+		logger -t pon "failed to apply EPON LLID mask"
+	[ -z "$mac" ] || apply_helper epon-mac "$llid_index" "$mac" || \
+		logger -t pon "failed to apply EPON MAC"
+	[ -z "$rx_fec" ] || apply_helper epon-rx-fec "$llid_index" "$rx_fec" || \
+		logger -t pon "failed to apply EPON RX FEC"
+	[ -z "$tx_fec" ] || apply_helper epon-tx-fec "$llid_index" "$tx_fec" || \
+		logger -t pon "failed to apply EPON TX FEC"
+	[ -z "$dying_gasp" ] || apply_helper epon-dying-gasp "$dying_gasp" || \
+		logger -t pon "failed to apply EPON dying gasp mode"
+	[ -z "$rate_mode" ] || apply_helper epon-rate-mode "$rate_mode" || \
+		logger -t pon "failed to apply EPON rate mode"
 }
 
 start_service() {
@@ -151,7 +186,7 @@ start_service() {
 	load_modules
 	setup_links
 	touch /tmp/.xponconfig
-	warn_unapplied_config
+	apply_config
 }
 
 stop_service() {
@@ -166,6 +201,13 @@ stop_service() {
 reload_service() {
 	stop_service
 	start_service
+}
+
+apply() {
+	config_load pon
+	ensure_node /dev/pon 190 0
+	ensure_node /dev/epon_mac 221 0
+	apply_config
 }
 
 service_triggers() {

@@ -20,6 +20,11 @@ define Package/airoha-pon-manager/description
 endef
 
 define Build/Compile
+	mkdir -p $(PKG_BUILD_DIR)
+	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS) $(TARGET_LDFLAGS) \
+		-Wall -Wextra \
+		-o $(PKG_BUILD_DIR)/ponctl-helper \
+		$(CURDIR)/src/ponctl-helper.c
 endef
 
 define Package/airoha-pon-manager/install
@@ -29,6 +34,7 @@ define Package/airoha-pon-manager/install
 	$(INSTALL_BIN) ./files/etc/init.d/pon $(1)/etc/init.d/pon
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) ./files/usr/sbin/ponctl $(1)/usr/sbin/ponctl
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ponctl-helper $(1)/usr/sbin/ponctl-helper
 endef
 
 $(eval $(call BuildPackage,airoha-pon-manager))
