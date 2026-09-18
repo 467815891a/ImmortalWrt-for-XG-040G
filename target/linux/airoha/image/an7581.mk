@@ -198,7 +198,8 @@ define Device/gemtek_xg2010g
        the fit volume inside the ubi partition at 0x00600000. Upgrade only \
        the ubi partition and keep bootloader, uenv, dsd and reserved_bmt intact.
   DEVICE_PACKAGES := fitblk kmod-leds-gpio kmod-gpio-button-hotplug \
-	kmod-airoha-xpon-en757x airoha-pon-manager
+	kmod-airoha-xpon-en757x kmod-airoha-pon-lddla \
+	airoha-pon-firmware airoha-pon-manager
   BLOCKSIZE := 128k
   PAGESIZE := 2048
   UBINIZE_OPTS := -E 5

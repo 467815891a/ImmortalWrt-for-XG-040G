@@ -1,0 +1,53 @@
+--- a/lddla/en7572_init.c
++++ b/lddla/en7572_init.c
+@@ -269,12 +269,8 @@ int Read_Data_From_Flash(void)
+ 
+ 	//====Read BOB data=====================================//
+ 	BOB_load_success =0;
+-#ifdef CONFIG_TP_IMAGE
+-	printk("-->WARNING : CHANGE Read_Data_From_Flash path to /tmp/etc/lddla/en7572_bob.conf  \n");
+-	src = "/tmp/etc/lddla/en7572_bob.conf";
+-#else
+-	src = "/etc/lddla/bob.conf";
+-#endif
++	src = "/etc/lddla/en7572_bob.conf";
++
+ 	#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
+ 	orgfs = get_fs();
+ 	set_fs(KERNEL_DS);
+@@ -291,7 +287,7 @@ int Read_Data_From_Flash(void)
+ 		}
+ 		else
+ 		{
+-            printk("Load /etc/lddla/bob.conf to flash_bob[]\n");
++            printk("Load /etc/lddla/en7572_bob.conf to flash_bob[]\n");
+ 			BOB_load_success =1;
+ 
+ 			LDDLA_KERNEL_FS_READ(srcf, flash_bob, sizeof(flash_bob), &srcf->f_pos);
+--- a/lddla/en7572_cmd.c
++++ b/lddla/en7572_cmd.c
+@@ -1115,7 +1115,7 @@ int save_bob_table(void)
+ 	#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
+ 	mm_segment_t			orgfs;	
+ 	#endif
+ 
+-    printk("Save flash_bob[] to /etc/lddla/bob.conf\n");
++    printk("Save flash_bob[] to /etc/lddla/en7572_bob.conf\n");
+ 	
+ 	for(i=0;i<128;i++)
+ 	{
+@@ -1128,11 +1128,6 @@ int save_bob_table(void)
+ 	}
+ 
+ 
+ 	//save conf to flash
+-#ifdef CONFIG_TP_IMAGE
+-	printk("-->WARNING : CHANGE save_bob_table path to /tmp/etc/lddla/en7572_bob.conf  \n");
+-	src = "/tmp/etc/lddla/en7572_bob.conf";
+-#else
+-	src = "/etc/lddla/bob.conf";
+-#endif
++	src = "/etc/lddla/en7572_bob.conf";
+ 
+ 	#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
+ 	orgfs = get_fs();//memory file

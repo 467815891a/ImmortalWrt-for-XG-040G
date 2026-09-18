@@ -1,0 +1,30 @@
+--- a/bsp/core/ecnt_scu.c
++++ b/bsp/core/ecnt_scu.c
+@@ -39,6 +39,7 @@
+ #include <linux/module.h>
+ #include <linux/types.h>
+ #include <linux/of_platform.h>
++#include <linux/of.h>
+ #include <linux/platform_device.h>
+ #include <linux/interrupt.h>
+ #include <asm/io.h>
+@@ -806,13 +807,19 @@ EXPORT_SYMBOL(SET_CLK_PER_ICG_ENABLE1);
+ #ifndef TCSUPPORT_CPU_EN7523
+ u32 GET_TOD_DIVIDER_ENABLE(void)
+ {
++#ifdef CR_CHIP_SCU_TOD_DIVIDER_ENABLE
+ 	return get_chip_scu_data(CR_CHIP_SCU_TOD_DIVIDER_ENABLE);
++#else
++	return 0;
++#endif
+ }
+ EXPORT_SYMBOL(GET_TOD_DIVIDER_ENABLE);
+ 
+ void SET_TOD_DIVIDER_ENABLE(u32 val)
+ {
++#ifdef CR_CHIP_SCU_TOD_DIVIDER_ENABLE
+ 	set_chip_scu_data(CR_CHIP_SCU_TOD_DIVIDER_ENABLE, val);
++#endif
+ }
+ EXPORT_SYMBOL(SET_TOD_DIVIDER_ENABLE);
+ #endif

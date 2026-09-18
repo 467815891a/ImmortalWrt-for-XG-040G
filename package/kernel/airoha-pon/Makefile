@@ -9,6 +9,7 @@ PKG_LICENSE:=GPL-2.0-only
 PKG_MAINTAINER:=coolsnowwolf <coolsnowwolf@gmail.com>
 
 AIROHA_PON_SOURCE_DIR:=$(TOPDIR)/add/airoha-collection-main/airoha-pon
+AIROHA_SDK_LDDLA_DIR:=$(TOPDIR)/add/airoha_sdk/private/lddla
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -56,7 +57,39 @@ define KernelPackage/airoha-xpon-en757x/description
  Kernel modules for the v2 Airoha EN7581 and AN7583 GPON and EPON MAC and PHY.
 endef
 
+define KernelPackage/airoha-pon-lddla
+  $(call KernelPackage/airoha-pon/Default)
+  DEPENDS+=@TARGET_airoha_an7581 +kmod-airoha-xpon-en757x +airoha-pon-firmware
+  TITLE:=Airoha EN7572 LDDLA optical module driver
+  VARIANT:=v2
+  FILES:=$(LDDLA_DIR)/en7572.ko
+endef
+
+define KernelPackage/airoha-pon-lddla/description
+ Kernel module for the EN7572 BoB optical frontend used by Gemtek XG2010G.
+endef
+
+define Package/airoha-pon-firmware
+  SECTION:=firmware
+  CATEGORY:=Firmware
+  DEPENDS:=@TARGET_airoha_an7581
+  TITLE:=Airoha EN7572 LDDLA firmware and BoB defaults
+endef
+
+define Package/airoha-pon-firmware/description
+ Runtime PM/DM firmware and stock BoB calibration defaults for the EN7572 LDDLA
+ optical frontend.
+endef
+
+define Package/airoha-pon-firmware/install
+	$(INSTALL_DIR) $(1)/etc/lddla
+	$(INSTALL_DATA) ./files/lddla/A60993.elf.pm $(1)/etc/lddla/
+	$(INSTALL_DATA) ./files/lddla/A60993.elf.dm $(1)/etc/lddla/
+	$(INSTALL_DATA) ./files/lddla/en7572_bob.conf $(1)/etc/lddla/
+endef
+
 PON_BSP_DIR:=$(PKG_BUILD_DIR)/bsp
+LDDLA_DIR:=$(PKG_BUILD_DIR)/lddla
 PON_INCLUDE_FLAGS:= \
 	-I$(PON_BSP_DIR)/include \
 	-I$(PON_BSP_DIR)/include/global_inc \
@@ -81,6 +114,15 @@ define Build/Prepare
 	rm -rf $(PKG_BUILD_DIR)
 	mkdir -p $(PKG_BUILD_DIR)
 	$(CP) $(AIROHA_PON_SOURCE_DIR)/src/. $(PKG_BUILD_DIR)/
+	if [ "$(BUILD_VARIANT)" = "v2" ]; then \
+		[ -d "$(AIROHA_SDK_LDDLA_DIR)" ] || { \
+			echo "Missing $(AIROHA_SDK_LDDLA_DIR). Put the vendor SDK under add/airoha_sdk first."; \
+			exit 1; \
+		}; \
+		mkdir -p $(LDDLA_DIR); \
+		$(CP) $(AIROHA_SDK_LDDLA_DIR)/. $(LDDLA_DIR)/; \
+	fi
+	$(Build/Patch)
 endef
 
 define Build/Patch
@@ -133,8 +175,15 @@ define Build/Compile
 		TCSUPPORT_WAN_EPON=1 \
 		$(PON_V2_CPU_MAKE) \
 		modules
+	+$(KERNEL_MAKE) $(PKG_JOBS) M="$(LDDLA_DIR)" \
+		KCFLAGS="$(PON_INCLUDE_FLAGS) $(PON_V2_CPU_CFLAGS) -DTCSUPPORT_MT7572=1" \
+		KBUILD_MODPOST_WARN=1 \
+		KBUILD_EXTRA_SYMBOLS="$(PON_BSP_DIR)/Module.symvers $(PKG_BUILD_DIR)/xpon-en757x/xpon_phy_10g/Module.symvers" \
+		modules
 endef
 endif
 
 $(eval $(call KernelPackage,airoha-gpon-en757x))
 $(eval $(call KernelPackage,airoha-xpon-en757x))
+$(eval $(call KernelPackage,airoha-pon-lddla))
+$(eval $(call BuildPackage,airoha-pon-firmware))
