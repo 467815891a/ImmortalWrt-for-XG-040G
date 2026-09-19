@@ -37,7 +37,6 @@ endef
 
 define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
-	$(CP) $(CURDIR)/files/. $(PKG_BUILD_DIR)/
 endef
 
 define Build/Configure
@@ -48,7 +47,7 @@ endef
 
 define Package/luci-app-xpon/install
 	$(INSTALL_DIR) $(1)
-	$(CP) $(PKG_BUILD_DIR)/. $(1)/
+	$(CP) $(CURDIR)/files/. $(1)/
 	chmod 755 $(1)/etc/init.d/* $(1)/etc/uci-defaults/* \
 		$(1)/etc/hotplug.d/iface/* $(1)/lib/preinit/* \
 		$(1)/usr/bin/* $(1)/usr/libexec/*
