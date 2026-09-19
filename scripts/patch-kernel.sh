@@ -19,8 +19,16 @@ if [ ! -d "${patchdir}" ] ; then
     exit 1
 fi
     
-for i in ${patchdir}/${patchpattern} ; do 
-    case "$i" in
+# Sort files to apply patch.
+# Use version sort so patch series like 930-99, 930-100, 930-101
+# are applied in numeric component order. Plain glob expansion puts
+# 930-100 before 930-11.
+files_patches=$(cd "${patchdir}" && ls ${patchpattern} 2>/dev/null | sort -V)
+
+for patch_file in $files_patches; do
+	i="${patchdir}/${patch_file}"
+
+	case "$i" in
 	*.gz)
 	type="gzip"; uncomp="gunzip -dc"; ;; 
 	*.bz)
