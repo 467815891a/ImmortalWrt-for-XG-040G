@@ -1,0 +1,9 @@
+#!/bin/sh
+# Rebind FE when the selected PPPoE nasX_Y interface appears or changes.
+case "$ACTION" in ifup|ifupdate) ;; *) exit 0 ;; esac
+case "$INTERFACE" in wan6|*_6) exit 0 ;; esac
+case "$INTERFACE:$DEVICE" in
+	nas[1-9]*_[0-7]:*|*:nas[1-9]*_[0-7]|*:pppoe-*|*:ppp*|*:pon.*)
+		/usr/bin/xg2010g-tlsfix.sh apply "$INTERFACE" "$DEVICE"
+		;;
+esac

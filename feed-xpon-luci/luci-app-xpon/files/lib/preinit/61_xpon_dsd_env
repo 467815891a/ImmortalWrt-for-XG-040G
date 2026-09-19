@@ -1,0 +1,7 @@
+#!/bin/sh
+
+xpon_dsd_env_init() {
+	[ -s /tmp/dsd.env ] || /usr/bin/xpon-dsd-env.sh
+}
+
+boot_hook_add preinit_main xpon_dsd_env_init

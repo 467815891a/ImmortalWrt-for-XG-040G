@@ -1,0 +1,281 @@
+#!/bin/sh
+# xpon-luci 首次安装/升级兜底（uci-defaults 只跑一次，随后自删）
+
+# 0) U-Boot envtools need this config to sync onu_type/bootargs.
+# Recover it if an overlay reset or manual copy dropped the file.
+if [ ! -s /etc/fw_env.config ] && grep -q '"uenv"' /proc/mtd 2>/dev/null; then
+	cat > /etc/fw_env.config <<'EOF'
+# Factory U-Boot environment. Recovery-only variables use a separate config if present.
+/dev/mtd1 0x0 0x4000 0x40000 0x1
+EOF
+	chmod 644 /etc/fw_env.config
+fi
+# 0) /etc/config/pon 缺失时创建；升级包不携带该文件，避免覆盖用户的组播 VLAN。
+P=/etc/config/pon
+if [ ! -f "$P" ]; then
+	cat > "$P" <<'EOF'
+config multicast 'multicast'
+	option enabled '0'
+	option vlan_id ''
+	option igmp_version '2'
+	option port '1'
+	option snooping '1'
+	option proxy '0'
+	option proxy_port '1'
+EOF
+fi
+
+# 1) /etc/config/xpon 缺失时重建（防误删后 LuCI 报错）
+X=/etc/config/xpon
+if [ ! -f "$X" ]; then
+	cat > "$X" <<'EOF'
+config auth 'device'
+	option vendor_id ''
+	option equipment_id ''
+	option onu_version ''
+	option omcc_version ''
+	option pon_mac ''
+	option epon_pon_mac ''
+	option gpon_pon_mac ''
+	option auth_type_g 'LOID'
+	option auth_method_g 'loid'
+	option epon_loid ''
+	option epon_loid_password '""'
+	option epon_sn ''
+	option gpon_loid ''
+	option gpon_loid_password '""'
+	option gpon_sn ''
+	option xpon_sn_auth_type 'ascii'
+	option sn_regid_password ''
+	option epon_oui ''
+	option epon_ctc_oui '111111'
+	option epon_ven_info ''
+	option epon_onu_vendor_id ''
+	option epon_serial ''
+
+config service 'tr069'
+	option enable '0'
+	option vlan ''
+	option pbit '7'
+	option mtu '1500'
+	option proto 'static'
+
+config service 'internet'
+	option enable '0'
+	option vlan ''
+	option pbit '0'
+	option mtu '1492'
+	option proto 'pppoe'
+	option ip6proto 'dhcpv6'
+
+config service 'iptv'
+	option enable '0'
+	option vlan ''
+	option mcast_vlan ''
+	option pbit '4'
+	option mtu '1500'
+	option proto 'ipoe'
+	option igmp 'snooping'
+	option igmp_version '2'
+	option iptv_port ''
+	option igmp_fastleave '1'
+
+config service 'voice'
+	option enable '0'
+	option vlan ''
+	option pbit '0'
+	option mtu '1500'
+	option proto 'static'
+	option metric '10'
+
+config voice_auth 'voice_auth'
+	option enable '1'
+	option registrar ''
+	option proxy ''
+	option domain ''
+	option username ''
+	option auth_username ''
+	option password ''
+	option display_name ''
+	option transport 'udp'
+	option port '5060'
+	option expires '3600'
+	option outbound_proxy ''
+
+config voice_auth 'voice_auth_line2'
+	option enable '0'
+	option registrar ''
+	option proxy ''
+	option domain ''
+	option username ''
+	option auth_username ''
+	option password ''
+	option display_name ''
+	option transport 'udp'
+	option port '5060'
+	option expires '3600'
+	option outbound_proxy ''
+
+config led 'behaviour'
+	option fix_sts_green '1'
+
+config fallback 'rules'
+	option enable '0'
+	option gem_base '10'
+EOF
+fi
+
+# 2) 确保 network.xpon_auth 存在（S00xponconfig 也会建，这里只补缺省键、不覆盖已有值）
+factory_sn=$(sed -n "s/^fsan='\(.*\)'/\1/p" /tmp/dsd.env 2>/dev/null | head -1)
+[ "${#factory_sn}" -eq 12 ] || factory_sn=NoNumber
+uci -q get network.xpon_auth >/dev/null || uci set network.xpon_auth='xpon_auth'
+# 缺省 PON 引擎和技术按当前 onu_type bits[7:4] 推导。
+pm=GPON
+pt=GPON
+ch=$(grep -o 'onu_type=[0-9a-fA-F]' /proc/cmdline 2>/dev/null | head -1 | cut -d= -f2)
+case "$ch" in
+	2) pm=EPON; pt=EPON ;;
+	3) pm=EPON; pt=EPON_10G_1G ;;
+	4) pm=EPON; pt=EPON_10G_10G ;;
+	5) pm=EPON; pt=EPON_1G_1G ;;
+	6) pt=XGPON ;;
+	7) pt=XGSPON ;;
+	c|C) pm=EPON; pt=EPON_TURBO ;;
+esac
+uci -q get network.xpon_auth.pon_mode >/dev/null || uci set network.xpon_auth.pon_mode="$pm"
+uci -q get network.xpon_auth.pon_tech >/dev/null || uci set network.xpon_auth.pon_tech="$pt"
+uci -q get network.xpon_auth.auth_type_g >/dev/null || uci set network.xpon_auth.auth_type_g='LOID'
+uci -q get network.xpon_auth.auth_method_g >/dev/null || uci set network.xpon_auth.auth_method_g='loid'
+uci -q get network.xpon_auth.xpon_sn_auth_type >/dev/null || uci set network.xpon_auth.xpon_sn_auth_type='ascii'
+uci -q get network.xpon_auth.sn >/dev/null || uci set network.xpon_auth.sn="$factory_sn"
+uci -q get network.xpon_auth.def_sn >/dev/null || uci set network.xpon_auth.def_sn="$factory_sn"
+uci -q get network.xpon_auth.loid >/dev/null || uci set network.xpon_auth.loid=''
+network_loid_password=$(uci -q get network.xpon_auth.loid_password)
+[ -n "$network_loid_password" ] || uci set network.xpon_auth.loid_password='""'
+uci commit network
+
+# 3) xpon.device 认证持久源（restore-auth 开机回写 network.xpon_auth 的依据）。
+#    旧包升级时补齐缺省键；用户经 LuCI 认证页保存后这些值会被覆盖为实际选择。
+uci -q get xpon.device >/dev/null || uci set xpon.device='auth'
+uci -q get xpon.device.pon_mode >/dev/null || uci set xpon.device.pon_mode="$(uci -q get network.xpon_auth.pon_mode)"
+uci -q get xpon.device.pon_tech >/dev/null || uci set xpon.device.pon_tech="$(uci -q get network.xpon_auth.pon_tech)"
+legacy_epon_mac=$(uci -q get xpon.device.epon_pon_mac)
+[ -n "$legacy_epon_mac" ] || legacy_epon_mac=$(uci -q get network.xpon_auth.epon_pon_mac)
+[ -n "$legacy_epon_mac" ] || legacy_epon_mac=$(uci -q get xpon.device.pon_mac)
+[ -n "$legacy_epon_mac" ] || legacy_epon_mac=$factory_mac
+uci -q get xpon.device.epon_pon_mac >/dev/null || uci set xpon.device.epon_pon_mac="$legacy_epon_mac"
+uci -q get xpon.device.gpon_pon_mac >/dev/null || uci set xpon.device.gpon_pon_mac=''
+uci -q get xpon.device.auth_type_g >/dev/null || uci set xpon.device.auth_type_g='LOID'
+uci -q get xpon.device.auth_method_g >/dev/null || uci set xpon.device.auth_method_g='loid'
+factory_vendor=${factory_sn%????????}
+[ "${#factory_vendor}" -eq 4 ] || factory_vendor=
+[ -n "$(uci -q get xpon.device.vendor_id)" ] || [ -z "$factory_vendor" ] || uci set xpon.device.vendor_id="$factory_vendor"
+legacy_loid=$(uci -q get xpon.device.loid)
+[ -n "$legacy_loid" ] || legacy_loid=$(uci -q get network.xpon_auth.loid)
+legacy_loid_password=$(uci -q get xpon.device.loid_password)
+[ -n "$legacy_loid_password" ] || legacy_loid_password=$(uci -q get network.xpon_auth.loid_password)
+[ "$legacy_loid_password" = '""' ] && legacy_loid_password=
+legacy_loid_password_value=$legacy_loid_password
+[ -n "$legacy_loid_password_value" ] || legacy_loid_password_value='""'
+legacy_sn=$(uci -q get xpon.device.sn)
+[ -n "$legacy_sn" ] || legacy_sn=$(uci -q get xpon.device.def_sn)
+[ -n "$legacy_sn" ] || legacy_sn=$(uci -q get network.xpon_auth.sn)
+[ -n "$legacy_sn" ] || legacy_sn=$(uci -q get network.xpon_auth.def_sn)
+case "$legacy_sn" in
+	[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) legacy_sn=$(printf '%s' "$legacy_sn" | tr 'a-z' 'A-Z') ;;
+	*) legacy_sn= ;;
+esac
+factory_sn_valid=
+[ "$factory_sn" != NoNumber ] && factory_sn_valid=$factory_sn
+if [ "$pm" = EPON ]; then
+	uci -q get xpon.device.epon_loid >/dev/null || uci set xpon.device.epon_loid="$legacy_loid"
+	uci -q get xpon.device.epon_loid_password >/dev/null || uci set xpon.device.epon_loid_password="$legacy_loid_password_value"
+	uci -q get xpon.device.epon_sn >/dev/null || uci set xpon.device.epon_sn="$legacy_sn"
+	uci -q get xpon.device.gpon_loid >/dev/null || uci set xpon.device.gpon_loid=''
+	uci -q get xpon.device.gpon_loid_password >/dev/null || uci set xpon.device.gpon_loid_password='""'
+	uci -q get xpon.device.gpon_sn >/dev/null || uci set xpon.device.gpon_sn="$factory_sn_valid"
+else
+	uci -q get xpon.device.gpon_loid >/dev/null || uci set xpon.device.gpon_loid="$legacy_loid"
+	uci -q get xpon.device.gpon_loid_password >/dev/null || uci set xpon.device.gpon_loid_password="$legacy_loid_password_value"
+	uci -q get xpon.device.gpon_sn >/dev/null || uci set xpon.device.gpon_sn="${legacy_sn:-$factory_sn_valid}"
+	uci -q get xpon.device.epon_loid >/dev/null || uci set xpon.device.epon_loid=''
+	uci -q get xpon.device.epon_loid_password >/dev/null || uci set xpon.device.epon_loid_password='""'
+	uci -q get xpon.device.epon_sn >/dev/null || uci set xpon.device.epon_sn=''
+fi
+uci -q delete xpon.device.loid
+uci -q delete xpon.device.loid_password
+uci -q delete xpon.device.sn
+uci -q delete xpon.device.def_sn
+uci -q get xpon.device.xpon_sn_auth_type >/dev/null || uci set xpon.device.xpon_sn_auth_type='ascii'
+uci -q get xpon.device.sn_regid_password >/dev/null || uci set xpon.device.sn_regid_password=''
+legacy_epon_oui=$(uci -q get xpon.device.epon_oui)
+[ -n "$legacy_epon_oui" ] || legacy_epon_oui=$(uci -q get network.xpon_auth.epon_oui)
+if [ -z "$legacy_epon_oui" ]; then
+	legacy_epon_oui=$(printf '%s' "$(uci -q get xpon.device.epon_pon_mac)" | tr -d ':' | cut -c 1-6 | tr 'a-f' 'A-F')
+fi
+uci -q get xpon.device.epon_oui >/dev/null || uci set xpon.device.epon_oui="$legacy_epon_oui"
+epon_oui=$(uci -q get xpon.device.epon_oui)
+epon_ctc_oui=$(uci -q get xpon.device.epon_ctc_oui)
+# Older xpon-luci versions incorrectly copied localOui into ctcOui. Migrate
+# only an empty value or that legacy derived value; preserve other overrides.
+if [ -z "$epon_ctc_oui" ] || { [ -n "$epon_oui" ] && [ "$epon_ctc_oui" = "$epon_oui" ]; }; then
+	uci set xpon.device.epon_ctc_oui='111111'
+fi
+uci -q get xpon.device.epon_ven_info >/dev/null || uci set xpon.device.epon_ven_info=''
+legacy_onu_vendor=$(uci -q get xpon.device.epon_onu_vendor_id)
+[ -n "$legacy_onu_vendor" ] || legacy_onu_vendor=$(uci -q get network.xpon_auth.epon_onu_vendor_id)
+uci -q get xpon.device.epon_onu_vendor_id >/dev/null || uci set xpon.device.epon_onu_vendor_id="$legacy_onu_vendor"
+uci -q get xpon.device.epon_serial >/dev/null || uci set xpon.device.epon_serial=''
+uci commit xpon
+
+# 4) 语音配置（升级时只补缺省键，不覆盖现有账号密码）。
+uci -q get xpon.voice_auth >/dev/null || uci set xpon.voice_auth='voice_auth'
+uci -q get xpon.voice_auth.enable >/dev/null || uci set xpon.voice_auth.enable='1'
+uci -q get xpon.voice_auth.registrar >/dev/null || uci set xpon.voice_auth.registrar=''
+uci -q get xpon.voice_auth.proxy >/dev/null || uci set xpon.voice_auth.proxy=''
+uci -q get xpon.voice_auth.domain >/dev/null || uci set xpon.voice_auth.domain=''
+uci -q get xpon.voice_auth.username >/dev/null || uci set xpon.voice_auth.username=''
+uci -q get xpon.voice_auth.auth_username >/dev/null || uci set xpon.voice_auth.auth_username=''
+uci -q get xpon.voice_auth.password >/dev/null || uci set xpon.voice_auth.password=''
+uci -q get xpon.voice_auth.display_name >/dev/null || uci set xpon.voice_auth.display_name=''
+uci -q get xpon.voice_auth.transport >/dev/null || uci set xpon.voice_auth.transport='udp'
+uci -q get xpon.voice_auth.port >/dev/null || uci set xpon.voice_auth.port='5060'
+uci -q get xpon.voice_auth.expires >/dev/null || uci set xpon.voice_auth.expires='3600'
+uci -q get xpon.voice_auth.outbound_proxy >/dev/null || uci set xpon.voice_auth.outbound_proxy=''
+uci -q get xpon.voice_auth_line2 >/dev/null || uci set xpon.voice_auth_line2='voice_auth'
+uci -q get xpon.voice_auth_line2.enable >/dev/null || uci set xpon.voice_auth_line2.enable='0'
+uci -q get xpon.voice_auth_line2.registrar >/dev/null || uci set xpon.voice_auth_line2.registrar=''
+uci -q get xpon.voice_auth_line2.proxy >/dev/null || uci set xpon.voice_auth_line2.proxy=''
+uci -q get xpon.voice_auth_line2.domain >/dev/null || uci set xpon.voice_auth_line2.domain=''
+uci -q get xpon.voice_auth_line2.username >/dev/null || uci set xpon.voice_auth_line2.username=''
+uci -q get xpon.voice_auth_line2.auth_username >/dev/null || uci set xpon.voice_auth_line2.auth_username=''
+uci -q get xpon.voice_auth_line2.password >/dev/null || uci set xpon.voice_auth_line2.password=''
+uci -q get xpon.voice_auth_line2.display_name >/dev/null || uci set xpon.voice_auth_line2.display_name=''
+uci -q get xpon.voice_auth_line2.transport >/dev/null || uci set xpon.voice_auth_line2.transport='udp'
+uci -q get xpon.voice_auth_line2.port >/dev/null || uci set xpon.voice_auth_line2.port='5060'
+uci -q get xpon.voice_auth_line2.expires >/dev/null || uci set xpon.voice_auth_line2.expires='3600'
+uci -q get xpon.voice_auth_line2.outbound_proxy >/dev/null || uci set xpon.voice_auth_line2.outbound_proxy=''
+uci commit xpon
+
+uci -q get pon.multicast >/dev/null || uci set pon.multicast='multicast'
+uci -q get pon.multicast.snooping >/dev/null || uci set pon.multicast.snooping='1'
+uci -q get pon.multicast.proxy >/dev/null || uci set pon.multicast.proxy='0'
+uci -q get pon.multicast.proxy_port >/dev/null || uci set pon.multicast.proxy_port="$(uci -q show pon 2>/dev/null | sed -n "s/^pon\.[^.=]*\.port='\([1-4]\)'$/\1/p" | head -1)"
+[ -n "$(uci -q get pon.multicast.proxy_port)" ] || uci set pon.multicast.proxy_port='1'
+uci commit pon
+
+# PON 驱动和认证启动顺序仍由原厂 S00xponconfig 先初始化。xpon-app
+# 在 S11 做轻量运行态守护：禁用原厂 uenv_update、重放 OAM/OMCI
+# RAM-only 身份字段、刷新 EPON 状态，不主动替代 S00 拉起驱动。
+# 原厂 S99uenv_update 会修改 env 后重启，继续移除其自动启动链接。
+rm -f /etc/rc.d/S99uenv_update /etc/rc.d/K99uenv_update
+rm -f /etc/rc.d/S95pon-services /etc/rc.d/K95pon-services
+[ ! -x /etc/init.d/xpon-app ] || /etc/init.d/xpon-app enable >/dev/null 2>&1 || true
+
+# 升级到 /admin/xpon/moci 后清理 LuCI 旧路由/模板缓存；手工 tar 覆盖
+# 安装时旧 provision.htm 可能残留在 overlay，删除它避免后续误判页面来源。
+rm -f /usr/lib/lua/luci/view/xpon/provision.htm
+rm -f /tmp/luci-indexcache
+rm -rf /tmp/luci-modulecache /tmp/luci-*cache
+
+exit 0

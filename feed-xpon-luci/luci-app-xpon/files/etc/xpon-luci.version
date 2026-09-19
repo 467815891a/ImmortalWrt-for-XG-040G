@@ -1,0 +1,88 @@
+xpon-luci 2.9 2026-08-31
+auth: 认证页 Vendor ID（当前）改为直接显示 omcicfgCmd get vendorId；GPON 重放/reconfig 后最后复写 vendorId，修复保存 NBEL 后运行态仍停在 AXON 的漂移
+services: 新建受管业务的 service_key/xpon_service/interface/pppname 统一为 nasX_Y；xpon_service/device 使用匿名 UCI 段，VLAN 仅保留在 pon.<VLAN>
+ppe: 首个启用的 INTERNET 路由 PPPoE 业务写入 xpon.ppe.default_wan_itf；启动重试与 iface hotplug 将对应 nasX_Y 写入 fe_default_wan_itf
+runtime: ponmgr get 改由 xpon-app 单写者按 30 秒快照刷新；OAM/OMCI/状态页面只读缓存，避免 timeout 无法终止 D 态 ioctl 导致并发锁死
+ui: XPON 页面兼容 argon 深色模式；检测 argon dark.css/LuCI data-darkmode 后启用 xpon-dark，并覆盖 alert-message 深色说明条
+services: 新建业务直接采用厂商 PPE 可识别的 nasX_Y，不在启动阶段迁移或改写旧接口
+auth: GPON LOID-only 空密码在 network 镜像保存为 "" 哨兵；OMCI reconfig 后立即复写 loidPasswd，并由 GPON 守护检测/修复 Econet 漂移
+epon: LOID-only 空密码严格重放时不再跳过 loidPasswd0 空值回读；有 LOID 才校验空密码，守护继续兜底修复漂移
+ui: OMCI SN Password 运行字段不再调用不存在的 ponmgr gpon get passwd，改显示配置值与最近 set passwd 下发日志
+ui: OMCI 页面永久改为 /admin/xpon/moci，移除旧 /admin/xpon/provision 路由并统一模板名；升级后清理 LuCI 旧路由缓存
+epon: OAM 完整身份回读成功后 best-effort 通知原厂 epon_oam 的 TCAPI_SAVE/update-config 队列入口（cmdType=24）；跨重启持久源为 UCI，启动后重放 OAM；OUI 在提交和下发时均从 EPON 注册 MAC 前三字节强制推导
+auth: 保存后重启提示页增加返回管理首页按钮；按当前 LAN IP、当前访问地址与 192.168.0.1 提供备用入口，避免 IP 变更后卡在 /admin/xpon/save
+boot: 重启恢复按当前 onu_type 统一选择 EPON/OAM 或 GPON/OMCI；旧配置优先读取 auth_method_g，PASSWORD 清除残留 LOID，sn 作为唯一 Vendor ID 来源
+auth: PASSWORD/SN 严格重放不再写入残留 LOID；GPON Vendor ID 始终由 PON SN 前四位派生，ONU 软件版本/Equipment ID 留空则清除覆盖并不下发
+auth: PASSWORD 认证要求 REG_ID 已填写或已有旧值；认证页、保存详情、严格下发日志与启动恢复日志均明文显示 passwd/REG_ID，区分“未保存/未下发/SDK 不回显”
+auth: PASSWORD 认证新增 auth_method_g=password 持久标记；开机恢复和严格重放固定走 SN + REG_ID(regid)，避免重启后丢失 PASSWORD 语义
+status: EPON OLT 设备卡片改显示 MPCP OLT MAC，不再显示 OMCI ME131 提示
+xpon-luci: opkg package is self-contained for stock Airoha firmware; no external airoha-xpon-vendor-tools dependency is required.
+services: 允许相同 tag VLAN ID 与 untag pon 多业务复用；未受管 pon/pon.<VID> 不再阻断保存
+status: EPON 10 秒快速轮询改读守护刷新的 LLID 状态文件，修复正常注册时主标签误报“未检测到有效 LLID”
+epon: 同 PID 守护扩展到 ctcOui/loidPasswd0/ONUSN，漂移时仅轻量修复变化项；新 PID 才完整重放
+auth: EPON SN 增加显式的 PON MAC 末字节 +0x08 候选按钮，仅填表且提示必须核对原装 ONU
+epon: OMCI sn/equipmentId/版本重启恢复 AXON/BVMN 属出厂 GPON 链；EPON 页面停止读取并不展示这些非认证字段
+epon: LOID-only 在首次应用和守护重放中都显式下发空 loidPasswd0，并对空值执行真实回读校验
+epon: 增加 OAM 身份守护；按 epon_oam PID 变化自动重放，且每 30 秒只读校验 ONUSN，漂移时才修复
+epon: ctcOui 与 localOui 解耦，默认及空值回退改为抓包验证的 111111；迁移旧版自动复制值并保留手动覆盖
+status: EPON 自动轮询不再调用会段错误/污染共享内存的 ponmgr epon 查询；MPCP 改读状态文件、/proc 与内核日志
+epon: 增加 CTC ONUSN 复合身份中的 6 字节 ONU ID 独立配置；仅对已校验的 epon_oam 写入并回读，和 MPCP MAC 分离
+services: Access 桥接持久摘除 br-lan 端口并跟踪恢复；保存重载、开机与 hotplug 统一核对实际桥成员
+epon: 通过 UCI 持久保存并重放 localOui/ctcOui/localVenInfo/onuVenID；最终写入改到 epon_oam 重启之后，防止恢复 111111/MTKc；原厂 TCAPI_SAVE 仅作运行态同步通知
+boot: 修正原厂 S00xponconfig 的 gponauth 变量错误；启动主路径直接采用持久认证和 PON MAC，S11 仅作旧固件兜底
+auth: PON SN/Vendor ID 提交后同时回读 network 与 xpon 持久源；PON MAC 输入框优先显示已保存配置，运行值独立展示
+boot: GPON pon 接口出现后即重放已保存 MAC，不再依赖 OMCI 90 秒内就绪；EPON env 已一致时不重复写入或生成备份
+boot: restore-auth 提交后回读 sn/def_sn，原厂 S00 覆盖未被纠正时记录明确错误，不再静默失败
+status: EPON 分离显示 MPCP 有效 LLID 与 OAM authStatus；实时状态优先，历史文件/日志只读兜底，不再用 LLID 推断认证成功
+UI: 模式、OMCI、业务、状态页面增加系统暗色与 html.dark 样式
+services: PPPoE 仅显示密码是否已配置，绝不回显明文；业务卡片显示已登记的 IPTV 组播 VLAN
+auth: PON MAC 输入框回读当前值；GPON 取 pon 业务接口，EPON 取驱动的启动 ethaddr 注册基准并同步为 MPCP ONU MAC
+services: 历史迁移：旧版曾使用 pppoe-pon<VID> 短接口名，避免超过 Linux 15 字符上限后 netifd 永久 pending
+boot: 禁用原厂 S99uenv_update 的 onu_type 强制回写，避免 PON 模式被恢复及循环重启
+mode: UCI 缺少 onu_type 时回退读取 U-Boot 目标值，同步修复 bootargs 旧模式及重复键名前缀
+auth: LOID 空密码在 OMCI 就绪后显式下发并回读，覆盖原厂 netifd 注入的 ECONET
+multicast: IGMP/MLD 代理新增 UNI1-4 端口绑定；SDK port func=2，重放不再覆盖为 func=1
+multicast: 新增 IGMP/MLD 侦听与 SDK Control/Proxy 开关，保存后自动重放转发表
+multicast: 修复 pon-multicast 与快照脚本缺少执行权限导致 driver_126
+auth: PON SN 与 Vendor ID 合并为完整 SN 单一输入；后台拆分并分别调用 SDK 下发
+auth: 持久配置优先展示；NoNumber 不再下发；native 成功后创建可观测重启任务
+auth: GPON/EPON 逐项严格下发与运行态回读；OMCC 同步原厂 gpon 配置；启动重放失败可观测
+auth: 修复后端误用正则 {n,m} 导致 OMCC/PON MAC/EPON OUI 合法值被拒绝
+auth: OMCC 改为数值解析并规范化为 0xNN；错误页显示 auth-r4 便于识别 LuCI 旧缓存
+auth: r5 将 OMCC 改为非阻断可选项；不可解析时保持原值，不再拒绝整张认证表单
+auth: 修复 native_write_64：SN 校验改为 BusyBox ash 原生检查、清理不可见空白并增加 network UCI 回退
+auth: 修复 ensure_section 错用 cursor:add 导致 xpon.device 身份字段静默保存失败；提交后强制 UCI 回读
+auth: 缺少 /etc/config/xpon 时由 nixio.fs 创建最小合法配置；检查 UCI section/commit 返回值
+auth: Equipment ID 放宽为 1~24 个可打印 ASCII，移除额外格式限制与冗余说明
+auth: Equipment ID 改为可选 ONU2-G 型号/标识；身份字段写入 network.xpon_auth 并用原生 uci.so 提交
+boot: preinit 从 mtd2 DSD 生成 /tmp/dsd.env；OMCI 就绪后两阶段重放设备信息
+install: /etc/config/xpon 改由 uci-defaults 首次创建，覆盖升级不再重置用户认证配置
+mode/status: 页面渲染彻底移除同步 xponigmpcmd 调用（ioctl 阻塞会挂起 LuCI→“登出”）；
+新增 xpon-mvlan-snap.sh 后台刷新“驱动实际登记”快照 /tmp/xpon-mvlan-act.txt，页面只读快照；
+moci 手动组播登记改后台 detach；status 页“IPTV 组播”诊断段改读快照
+mode: 修复添加/删除仍登出——后台组播登记与 reboot 子 shell 补全 >/dev/null 2>&1 detach；
+mode: vconfig/ip/ifconfig/gponmapcmd 全部 timeout 3 防 ioctl 挂死；
+mode: 8021q 诊断改判 /proc/net/vlan（lsmod 查不到内建内核模块，不再误报“未加载”）；
+mode: 删除接口恒连持久化段一起删，去掉“连持久化段”复选框；
+mode: 组播新增“驱动实际登记”（xponigmpcmd mvlan show）回显
+vlan: ctl_ver=2 (manual GEM write)
+status: optical DDM (bob_info) + PON traffic bars
+auth: LOID default note
+auth: read-back runtime values (omcicfgCmd get + PON MAC + onu_type + sys_xpon_mode)
+status: DDM cards Vcc/Ibias/Imod
+vlan: no-OMCI (pure manual) guidance box
+auth: 认证方式仅 LOID/PASSWORD；移动 Password 独立 REG_ID（无需 SN 密码）；各字段回显当前生效值
+mode: PON VLAN 接口管理（pon.<VID> 添加/删除 + xpon_vlan 持久化）
+vlan: 页面改名 OLT 下发情况
+status: 去 LOID 卡片；onu_type 显示 SFU/HGU 形态；Vcc DDM 读取加 dmesg 全量回退；流量长条加高
+mode: 删技术详情；PON VLAN 区块读回 wan_vlan 持久化配置（修正 section 类型 wan_vlan）
+mode: ONU 形态下拉精简为 2 项（HGU/SFU），注释精简
+status: PON 接口流量独占一行（RX/TX 长条并排）
+vlan: 菜单/标题改名回「下发情况」
+mode: PON VLAN 列表多格式读取（proc/ip/ifconfig）+ 保存 pcall 保护 + 优先 vconfig
+mode: 删除顶部大段说明
+UI: 全页面说明精简（auth/mode/vlan/status）
+mode: PON VLAN 添加/删除改 GET+token（绕开 LuCI 21.02 POST 会话拦截，修复“点添加被登出”）
+mode: PON VLAN 读取加 sysfs /sys/class/net 兜底 + 空表内联诊断原始输出
+mode: 修复删除仍登出——persisted 表删除表单与 ONU 形态表单全部改 GET+token（mode.htm 残留 POST 已清零）
+mode: 组播登记改后台异步（xponigmpcmd 同步会挂起 LuCI 请求）；接口/持久化表新增组播 M-VLAN 列回显

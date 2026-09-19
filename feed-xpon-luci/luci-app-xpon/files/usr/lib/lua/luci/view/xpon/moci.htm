@@ -1,0 +1,93 @@
+<%+header%>
+<script type="text/javascript" src="<%=resource%>/view/xpon.js?v=<%=devstamp or "20260827-dark"%>"></script>
+<style>
+.omci-dump{background:#f5f5f5;border:1px solid #d8dee4;padding:10px;font-size:12px;line-height:1.45;overflow:auto;white-space:pre-wrap}
+.omci-na{color:#777}
+.omci-ok{color:#237804;font-weight:600}
+.omci-flow td,.omci-flow th{font-size:12px;vertical-align:top}
+.omci-table td,.omci-table th{font-size:12px;vertical-align:top;padding:3px 8px;line-height:1.25}
+.omci-table code{line-height:1.25}
+.omci-note{color:#777;font-size:11px;margin-left:6px;white-space:normal}
+.omci-flow-stage{font-weight:600;text-align:center;white-space:nowrap}
+.omci-flow-values{word-break:break-all}
+.omci-pill{display:inline-block;border-radius:3px;padding:1px 5px;font-size:11px;font-weight:600;color:#fff;background:#607d8b}
+.omci-pill-ok{background:#2e7d32}
+.omci-pill-warn{background:#ef6c00}
+.omci-pill-err{background:#c62828}
+@media (prefers-color-scheme: dark){
+	.omci-dump{background:#252526;border-color:#3c3c3c;color:#ccc;}
+	.omci-na{color:#8a8a8a;}
+	.omci-ok{color:#66bb6a;}
+	.omci-note{color:#8a8a8a;}
+	.omci-pill-ok{background:#66bb6a;color:#111;}
+	.omci-pill-warn{background:#ffa726;color:#111;}
+	.omci-pill-err{background:#ef5350;color:#111;}
+}
+html.xpon-dark .omci-dump{background:#252526;border-color:#3c3c3c;color:#ccc;}
+html.xpon-dark .omci-na{color:#8a8a8a;}
+html.xpon-dark .omci-ok{color:#66bb6a;}
+html.xpon-dark .omci-note{color:#8a8a8a;}
+html.xpon-dark .omci-pill-ok{background:#66bb6a;color:#111;}
+html.xpon-dark .omci-pill-warn{background:#ffa726;color:#111;}
+html.xpon-dark .omci-pill-err{background:#ef5350;color:#111;}
+</style>
+<% local function esc(s) return (tostring(s or ''):gsub('&','&amp;'):gsub('<','&lt;'):gsub('>','&gt;')) end
+local an=analysis or {}; local rows=an.rows or {}; local concl=an.conclusion %>
+<h2 name="content">GPON OMCI 信息</h2>
+
+<% if concl then %><div class="alert-message"><b><%=esc(concl.title)%></b>：<%=esc(concl.text)%></div><% end %>
+
+<fieldset class="cbi-section"><legend>OMCI 注册交互视图</legend>
+<div class="cbi-value-description">按 GPON OMCI 上线逻辑组织：PLOAM 建立 OMCC 后，OLT 通过 OMCI 主从消息读取 MIB、识别 VEIP/PPTP 模型，再下发 TCONT/GEM/VLAN 业务承载。页面只展示本机 SDK/ME/状态文件可读到的运行值。</div>
+<table class="cbi-section-table omci-flow"><thead><tr><th>步骤</th><th>方向</th><th>报文/阶段</th><th>交互目的</th><th>读到的值</th><th>来源</th></tr></thead><tbody>
+<% for _,r in ipairs(interaction_rows or {}) do local lv=(r.level=="ok" or r.level=="warn" or r.level=="err") and r.level or "info" %>
+<tr><td class="omci-flow-stage"><%=esc(r.stage)%></td><td><span class="omci-pill omci-pill-<%=lv%>"><%=esc(r.direction)%></span></td><td><code><%=esc(r.message)%></code></td><td><%=esc(r.purpose)%></td><td class="omci-flow-values"><%=esc(r.values)%></td><td><%=esc(r.evidence)%></td></tr>
+<% end %>
+</tbody></table>
+<div class="cbi-value-description">若要看真实 OMCI TCI、Message Type 和 Attribute Mask，需要抓 OMCI/GEM 原始报文；本页把已解析的 ME 与 SDK 状态映射到注册时序，便于判断卡在哪一步。</div>
+</fieldset>
+
+<fieldset class="cbi-section"><legend>OMCI 运行身份字段</legend>
+<table class="cbi-section-table omci-table"><thead><tr><th>字段</th><th>OMCI 命令/来源</th><th>当前运行值</th></tr></thead><tbody>
+<% for _,f in ipairs(omci_fields or {}) do %>
+<tr><td><%=esc(f.label)%></td><td><code><%=esc(f.source)%></code></td><td><code><%=esc(f.value)%></code><% if f.note and f.note ~= '' then %><span class="omci-note"><%=esc(f.note)%></span><% end %></td></tr>
+<% end %>
+</tbody></table>
+<div class="cbi-value-description">这里汇总 GPON/XGPON/XGSPON 注册身份、OMCC、SN/LOID/Password、设备型号版本、OLT-G、PON 业务 MAC 和 MIB 同步状态。</div>
+</fieldset>
+
+<fieldset class="cbi-section"><legend>GEM Port 与业务关联</legend>
+<div class="cbi-value-description">显式 VID 优先匹配 <code>/etc/config/pon</code>；<code>vid=N/A</code> 表示通配承载。</div>
+<% if #rows>0 then %><table class="cbi-section-table"><thead><tr><th>GEM</th><th>角色</th><th>TCONT / 队列</th><th>显式 VLAN</th><th>规则类型</th><th>匹配业务</th><th>下行接口</th></tr></thead><tbody>
+<% for _,r in ipairs(rows) do %><tr><td><code><%=esc(r.gem)%></code></td><td><%=esc(r.role)%></td><td><code><%=esc(r.tcont)%> / <%=esc(r.queue)%></code></td><td><% if r.vids~='' then %><%=esc(r.vids)%><% else %><span class="omci-na">无显式 VID</span><% end %></td><td><% if r.wild_bool then %><span class="omci-ok">通配 vid=N/A</span><% else %>显式 VID<% end %></td><td><%=esc(r.biz)%></td><td><% if r.ifmask~='' then %><code>0x<%=esc(r.ifmask)%></code><% else %><span class="omci-na">N/A</span><% end %></td></tr><% end %>
+</tbody></table><div class="cbi-value-description"><%=esc(an.note or '')%></div><% else %><p class="omci-na">当前没有 GEM/VLAN 数据。ONU 可能尚未进入 O5，或 OLT 尚未完成 OMCI 下发。</p><% end %>
+</fieldset>
+
+<fieldset class="cbi-section"><legend>OMCI 下发对象</legend>
+<h4>TCONT（ME262）</h4>
+<% if #(tcont_entries or {})>0 then %><table class="cbi-section-table"><tr><th>索引</th><th>Alloc-ID</th><th>硬件通道</th></tr><% for _,r in ipairs(tcont_entries) do %><tr><td><code><%=esc(r.index)%></code></td><td><code><%=esc(r.alloc)%></code></td><td><code><%=esc(r.channel)%></code></td></tr><% end %></table><% else %><p class="omci-na">没有读取到 TCONT 实例。</p><% end %>
+
+<h4>第一层：GEM Port Network CTP（ME268）</h4>
+<% if #(gem_entries or {})>0 then %><table class="cbi-section-table"><tr><th>GEM Port ID</th><th>TCONT</th><th>类型</th><th>MAC If</th><th>Loopback</th><th>Encryption</th><th>诊断角色</th></tr><% for _,r in ipairs(gem_entries) do local role=(r.gem=='57') and 'OMCC 管理' or ((r.gem=='65534' or r.kind=='Multicast') and '组播' or '业务') %><tr><td><code><%=esc(r.gem)%></code></td><td><code><%=esc(r.tcont)%></code></td><td><%=esc(r.kind)%></td><td><code><%=esc(r.macif)%></code></td><td><%=esc(r.loopback)%></td><td><%=esc(r.encryption)%></td><td><%=role%></td></tr><% end %></table><% else %><p class="omci-na">没有读取到 ME268/GEM Port 实例。</p><% end %>
+
+<h4>第二层：VLAN Tagging Filter Data（ME84）</h4>
+<% if #(me84_rows or {})>0 then %><table class="cbi-section-table"><tr><th>VLAN ID</th><th>关联 GEM</th><th>TP Type</th><th>Tag Flag</th><th>Services 匹配</th></tr><% for _,r in ipairs(me84_rows) do %><tr><td><code><%=esc(r.vid)%></code></td><td><code><%=esc(r.gem)%></code></td><td><code><%=esc(r.tp)%></code></td><td><code><%=esc(r.tf)%></code></td><td><% local found='未匹配本机业务' for _,s in ipairs(services or {}) do if s.vlan_id==r.vid then found=(s.name or ('VLAN '..r.vid))..'（'..(s.service_type or 'other')..'）' end end %><%=esc(found)%></td></tr><% end %></table><% else %><p class="omci-na">没有显式 ME84 条目。若存在通配 GEM，这是正常状态，业务由通配规则承载。</p><% end %>
+
+<h4>第三层：Extended VLAN Tagging Operation（ME171）</h4>
+<% if #(me171_rows or {})>0 then %><table class="cbi-section-table"><tr><th>Treatment Method</th><th>标签操作</th><th>Inner VID Filter</th><th>解释</th></tr><% for _,r in ipairs(me171_rows) do %><tr><td><code><%=esc(r.tm)%></code></td><td><%=esc(r.tm_name)%></td><td><code><%=esc(r.fv)%></code></td><td><%=esc(r.fv_txt)%></td></tr><% end %></table><% else %><p class="omci-na">没有读取到 ME171 操作。可能为透明传输，或 OLT 使用了其他 VLAN 管理实体。</p><% end %>
+</fieldset>
+
+<fieldset class="cbi-section"><legend>原始诊断数据</legend>
+<% for _,g in ipairs(omci_me_groups or {}) do %><details><summary>G.988 <%=esc(g.title)%></summary><pre class="omci-dump"><%=esc(g.dump)%></pre></details><% end %>
+<% for _,g in ipairs(ponmgr_groups or {}) do %><details><summary>SDK <%=esc(g.title)%></summary><pre class="omci-dump"><%=esc(g.dump)%></pre></details><% end %>
+<details><summary>SDK 逐 TCONT / GEM 计数</summary><pre class="omci-dump"><%=esc(channel_counters or '')%></pre></details>
+<details><summary>驱动 GEM 映射依据（上行 / 下行 / 队列）</summary><pre class="omci-dump">== Upstream ==
+<%=esc(gem_up_raw or '无')%>
+
+== Downstream ==
+<%=esc(gem_down_raw or '无')%>
+
+== Queue ==
+<%=esc(gem_queue_raw or '无')%></pre></details>
+</fieldset>
+<%+footer%>

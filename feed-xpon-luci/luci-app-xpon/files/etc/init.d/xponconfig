@@ -1,0 +1,202 @@
+#!/bin/sh /etc/rc.common
+# (C) 2013 openwrt.org
+
+START=00
+PROFILE_CFG=/userfs/profile.cfg
+
+validate_xponauth_section()
+{
+    local fsan xpon_auth serialnumber xponmode pon_mode
+
+    fsan="NoNumber"
+    [ -r /tmp/dsd.env ] && fsan=`awk -F \' '/^fsan=/ {print $2; exit}' /tmp/dsd.env`
+    xpon_auth=`uci -q get network.xpon_auth`
+    xponmode=`cat /proc/tc3162/sys_xpon_mode 2>/dev/null`
+    case "$xponmode" in
+        2|3|4|5|12) pon_mode=EPON ;;
+        *) pon_mode=GPON ;;
+    esac
+
+    # Factory compatibility path: seed missing values only. The original code
+    # tested the undefined variable $gponauth and overwrote the saved SN on
+    # every boot. Existing authentication values must be left untouched.
+    if [ -z "$xpon_auth" ]; then
+        uci set network.xpon_auth='xpon_auth'
+        uci set network.xpon_auth.pon_mode="$pon_mode"
+        uci set network.xpon_auth.auth_type_g=sn
+        uci set network.xpon_auth.gpon_sn_auth_type=ascii
+        uci set network.xpon_auth.sn_ascii_password=xxxx
+        if [ "$pon_mode" = GPON ]; then
+            uci set network.xpon_auth.sn="$fsan"
+            uci set network.xpon_auth.def_sn="$fsan"
+        fi
+        uci commit network
+        logger -t XPON "uci auth section initialized, pon_mode:$pon_mode fsan:$fsan"
+    else
+        serialnumber=`uci -q get network.xpon_auth.sn`
+        if [ "$pon_mode" = GPON ] && { [ -z "$serialnumber" ] || [ "$serialnumber" = "NoNumber" ]; }; then
+            uci set network.xpon_auth.sn="$fsan"
+            uci set network.xpon_auth.def_sn="$fsan"
+            uci commit network
+            logger -t XPON "missing uci sn initialized, fsan:$fsan"
+        fi
+    fi
+}
+start() {
+    if [ -f $PROFILE_CFG ] ; then
+	. $PROFILE_CFG
+    fi
+
+    echo "mknod /dev/hwnat0 c 220 0"
+    mknod /dev/hwnat0 c 220 0
+
+    echo "mknod /dev/qdma_lan c 119 0"
+    mknod /dev/qdma_lan c 119 0
+
+    echo "mknod /dev/qdma_wan c 120 0"
+    mknod /dev/qdma_wan c 120 0
+
+    echo "mknod /dev/fe c 226 0"
+    mknod /dev/fe c 226 0
+
+    echo "mknod /dev/serdes_cfg c 267 0"
+    mknod /dev/serdes_cfg c 267 0
+
+    echo "mknod /dev/pon c 190 0"
+    mknod /dev/pon c 190 0
+
+    echo "mknod /dev/xponmap c 210 0"
+    mknod /dev/xponmap c 210 0
+
+    echo "mknod /dev/ponvlan c 215 0"
+    mknod /dev/ponvlan c 215 0
+
+    echo "mknod /dev/ponmacfilter c 216 0"
+    mknod /dev/ponmacfilter c 216 0
+
+    echo "mknod /dev/xponigmp c 185 0"
+    mknod /dev/xpon_igmp c 185 0
+
+    echo "mknod /dev/gponflow c 184 0"
+    mknod /dev/gpon_flow c 184 0
+
+    echo "mknod /dev/epon_mac c 221 0"
+    mknod /dev/epon_mac c 221 0
+
+    echo "mknod /dev/ifc c 241 0"
+    mknod /dev/ifc c 241 0
+
+    echo "insmod econet-bob.ko"
+    insmod /lib/modules/5.4.55/econet_bob.ko
+
+    if [ -f "/proc/tc3162/wan_2_5" ]; then
+        echo "insmod ae_wan"
+        XPONMODE=`cat /proc/tc3162/sys_xpon_mode`
+        echo "XPONMODE:" "$XPONMODE" > /dev/console
+
+        if [ "$XPONMODE" = "1" ] ;then
+            echo "xponconfig pon control - gpon"
+
+            cp /tmp/en7572_bob_0.conf /etc/lddla/en7572_bob.conf
+        else
+            echo "xponconfig pon control - xgspon"
+
+            cp /tmp/en7572_bob_1.conf /etc/lddla/en7572_bob.conf
+        fi
+
+        sleep 1
+
+        echo "insmod en7572.ko"
+        insmod /lib/modules/en7572.ko
+
+    else
+        XPONMODE=`cat /proc/tc3162/sys_xpon_mode`
+        echo "XPONMODE:" "$XPONMODE" > /dev/console
+
+        if [ "$XPONMODE" = "1" ] ;then
+            echo "xponconfig pon control - gpon"
+
+            cp /tmp/en7572_bob_0.conf /etc/lddla/en7572_bob.conf
+        else
+            echo "xponconfig pon control - xgspon"
+
+            cp /tmp/en7572_bob_1.conf /etc/lddla/en7572_bob.conf
+        fi
+
+        sleep 1
+
+        echo "insmod en7572.ko"
+        insmod /lib/modules/en7572.ko
+
+        echo "insmod econet-phy_10g.ko"
+        insmod /lib/modules/5.4.55/phy_10g.ko
+
+        if [ "$XPONMODE" = "1" ] ;then
+            echo "insmod econet-xpon.ko"
+            insmod /lib/modules/xpon.ko
+            BBF247_FLAG_PROC="/proc/gpon/bbf247Flag"
+        else
+            echo "insmod  econet-xpon_10g.ko"
+            insmod /lib/modules/xpon_10g.ko
+            BBF247_FLAG_PROC="/proc/xgpon/bbf247Flag"
+        fi
+
+        echo "insmod econet-xpon_int.ko"
+        insmod /lib/modules/5.4.55/xpon_int.ko
+
+        echo "insmod econet-xpon_map.ko"
+        insmod /lib/modules/5.4.55/xponmap.ko
+
+        echo "insmod econet-pon_vlan.ko"
+        insmod /lib/modules/5.4.55/ponvlan.ko
+
+        if [ "$TCSUPPORT_PON_SFU_HGU_HYBRID" != "" ]; then
+                echo "insmod econet-gpon_igmp.ko"
+            insmod /lib/modules/5.4.55/gpon_igmp.ko
+        else
+            echo "insmod econet-xpon_igmp.ko"
+            insmod /lib/modules/5.4.55/xpon_igmp.ko
+        fi
+
+        echo "insmod econet-gpon_flow.ko"
+        insmod /lib/modules/5.4.55/gpon_flow.ko
+
+        echo "insmod econet-ponmacfilter.ko"
+        insmod /lib/modules/5.4.55/ponmacfilter.ko
+
+        echo " echo 1 > /proc/sys/net/ipv4/ip_forward"
+        echo 1 > /proc/sys/net/ipv4/ip_forward
+
+        echo "touch /tmp/.xponconfig"
+        touch /tmp/.xponconfig
+
+        mkdir -p /tmp/ponstatus
+        validate_xponauth_section
+
+        [ -e /tmp/dsd.env ] && source /tmp/dsd.env
+        [ -n "${wan_mac}" ] && {
+            ifconfig pon hw ether "${wan_mac}"
+        }
+
+        echo "ifconfig pon up"
+        ifconfig pon up
+
+        echo "ifconfig omci up"
+        ifconfig omci up
+
+#        echo "/bin/sh /etc/prodef.sh &"
+#        /bin/sh /etc/prodef.sh &
+
+        echo $BBF247_FLAG_PROC
+        BBF247_FLAG=`cat $BBF247_FLAG_PROC`
+        echo $BBF247_FLAG
+        if [  "${BBF247_FLAG}" = "1"  ] ;then
+            echo "----------------BBF247 Enable----------------" > /dev/console
+            taskset 1 /etc/bbf247_config.sh   &
+        fi
+    fi
+}
+
+stop() {
+        echo "Stopping"
+}

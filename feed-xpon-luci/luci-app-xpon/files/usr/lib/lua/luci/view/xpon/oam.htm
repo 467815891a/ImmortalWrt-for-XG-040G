@@ -1,0 +1,132 @@
+<%+header%>
+<script type="text/javascript" src="<%=resource%>/view/xpon.js?v=<%=devstamp or "20260827-dark"%>"></script>
+<style>
+.oam-cardrow{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0;}
+.oam-card{flex:1 1 220px;border:1px solid #ddd;border-left:4px solid #999;border-radius:3px;background:#fff;padding:7px 9px;box-sizing:border-box;}
+.oam-card-ok{border-left-color:#2e7d32;}
+.oam-card-warn{border-left-color:#ef6c00;}
+.oam-card-err{border-left-color:#c62828;}
+.oam-card-info{border-left-color:#607d8b;}
+.oam-label{font-size:11px;color:#666;margin-bottom:2px;}
+.oam-value{font-size:13px;font-weight:600;word-break:break-all;}
+.oam-table td,.oam-table th{font-size:12px;}
+.oam-flow td,.oam-flow th{font-size:12px;vertical-align:top;}
+.oam-flow-stage{font-weight:600;text-align:center;white-space:nowrap;}
+.oam-pill{display:inline-block;border-radius:3px;padding:1px 5px;font-size:11px;font-weight:600;color:#fff;background:#607d8b;}
+.oam-pill-ok{background:#2e7d32;}
+.oam-pill-warn{background:#ef6c00;}
+.oam-pill-err{background:#c62828;}
+.oam-flow-values{word-break:break-all;}
+.oam-dump{background:#f5f5f5;border:1px solid #d8dee4;padding:10px;font-size:12px;line-height:1.45;overflow:auto;white-space:pre-wrap;}
+.oam-na{color:#777;}
+details.oam-sec{margin:10px 0;border:1px solid #ddd;border-radius:3px;background:#fff;}
+details.oam-sec summary{cursor:pointer;padding:6px 10px;font-size:13px;font-weight:600;color:#333;background:#f7f7f7;border-radius:3px;user-select:none;}
+details.oam-sec summary:hover,details.oam-sec[open] summary{background:#eef3fa;}
+details.oam-sec[open] summary{border-bottom:1px solid #ddd;}
+@media (prefers-color-scheme: dark){
+	.oam-card{background:#1e1e1e;border-color:#3c3c3c;}
+	.oam-card-ok{border-left-color:#66bb6a;}
+	.oam-card-warn{border-left-color:#ffa726;}
+	.oam-card-err{border-left-color:#ef5350;}
+	.oam-card-info{border-left-color:#78909c;}
+	.oam-label{color:#adb5bd;}
+	.oam-value{color:#ccc;}
+	.oam-pill-ok{background:#66bb6a;color:#111;}
+	.oam-pill-warn{background:#ffa726;color:#111;}
+	.oam-pill-err{background:#ef5350;color:#111;}
+	.oam-dump{background:#252526;border-color:#3c3c3c;color:#ccc;}
+	.oam-na{color:#8a8a8a;}
+	details.oam-sec{background:#1e1e1e;border-color:#3c3c3c;}
+	details.oam-sec summary{color:#ccc;background:#252526;}
+	details.oam-sec summary:hover,details.oam-sec[open] summary{background:#2d2d2d;}
+	details.oam-sec[open] summary{border-bottom-color:#3c3c3c;}
+}
+html.xpon-dark .oam-card{background:#1e1e1e;border-color:#3c3c3c;}
+html.xpon-dark .oam-card-ok{border-left-color:#66bb6a;}
+html.xpon-dark .oam-card-warn{border-left-color:#ffa726;}
+html.xpon-dark .oam-card-err{border-left-color:#ef5350;}
+html.xpon-dark .oam-card-info{border-left-color:#78909c;}
+html.xpon-dark .oam-label{color:#adb5bd;}
+html.xpon-dark .oam-value{color:#ccc;}
+html.xpon-dark .oam-pill-ok{background:#66bb6a;color:#111;}
+html.xpon-dark .oam-pill-warn{background:#ffa726;color:#111;}
+html.xpon-dark .oam-pill-err{background:#ef5350;color:#111;}
+html.xpon-dark .oam-dump{background:#252526;border-color:#3c3c3c;color:#ccc;}
+html.xpon-dark .oam-na{color:#8a8a8a;}
+html.xpon-dark details.oam-sec{background:#1e1e1e;border-color:#3c3c3c;}
+html.xpon-dark details.oam-sec summary{color:#ccc;background:#252526;}
+html.xpon-dark details.oam-sec summary:hover,html.xpon-dark details.oam-sec[open] summary{background:#2d2d2d;}
+html.xpon-dark details.oam-sec[open] summary{border-bottom-color:#3c3c3c;}
+</style>
+<% local function esc(s) return (tostring(s or ''):gsub('&','&amp;'):gsub('<','&lt;'):gsub('>','&gt;')) end %>
+
+<h2 name="content">EPON OAM 信息</h2>
+
+<% if not is_epon then %>
+<div class="alert-message warning">当前驱动模式不是 EPON 家族；本页仍可打开，但 OAM/LLID 输出可能为空。GPON/XGPON/XGSPON 请查看 OMCI 页面。</div>
+<% else %>
+<div class="alert-message">EPON 注册分为 MPCP/LLID 与 OAM 扩展认证。本页只读展示运行状态，不能修改认证参数。</div>
+<% end %>
+
+<div class="oam-cardrow">
+<% for _,it in ipairs(summary or {}) do
+	local lv = (it.level == "ok" or it.level == "warn" or it.level == "err") and it.level or "info"
+%>
+	<div class="oam-card oam-card-<%=lv%>">
+		<div class="oam-label"><%=esc(it.label)%></div>
+		<div class="oam-value"><%=esc(it.value)%></div>
+	</div>
+<% end %>
+</div>
+
+<fieldset class="cbi-section">
+	<legend>EPON 注册交互视图</legend>
+	<div class="cbi-value-description">按 H3C EPON 白皮书中的注册链路组织：先 MPCP 注册获得 LLID，再进入标准 OAM 和扩展 OAM 协商。页面只展示本机 SDK/日志能读到的运行值。</div>
+	<table class="cbi-section-table oam-flow">
+		<thead><tr><th>步骤</th><th>方向</th><th>报文/阶段</th><th>交互目的</th><th>读到的值</th><th>来源</th></tr></thead>
+		<tbody>
+<% for _,r in ipairs(interaction_rows or {}) do
+	local lv = (r.level == "ok" or r.level == "warn" or r.level == "err") and r.level or "info"
+%>
+			<tr>
+				<td class="oam-flow-stage"><%=esc(r.stage)%></td>
+				<td><span class="oam-pill oam-pill-<%=lv%>"><%=esc(r.direction)%></span></td>
+				<td><code><%=esc(r.packet)%></code></td>
+				<td><%=esc(r.purpose)%></td>
+				<td class="oam-flow-values"><%=esc(r.values)%></td>
+				<td><%=esc(r.evidence)%></td>
+			</tr>
+<% end %>
+		</tbody>
+	</table>
+	<div class="cbi-value-description">若需要核对真正的 OAMPDU 字节序，仍建议在 <code>oam</code> 接口抓包；本页用于把运行态配置、注册状态和认证结果放到同一条链路上。</div>
+</fieldset>
+
+<fieldset class="cbi-section">
+	<legend>OAM / MPCP 运行身份字段</legend>
+	<table class="cbi-section-table oam-table">
+		<thead><tr><th>字段</th><th>OAM 命令/来源</th><th>当前运行值</th></tr></thead>
+		<tbody>
+<% for _,f in ipairs(oam_fields or {}) do %>
+			<tr>
+				<td><%=esc(f.label)%></td>
+				<td><code><%=esc(f.cmd)%></code></td>
+				<td><% if f.value ~= '' then %><code><%=esc(f.value)%></code><% else %><span class="oam-na">（空）</span><% end %></td>
+			</tr>
+<% end %>
+		</tbody>
+	</table>
+	<div class="cbi-value-description">这里汇总 EPON 注册 MAC、LLID、OLT MAC、OAM 认证状态和 CTC 扩展身份；CTC OUI 与 ONU 本地 OUI 是两个字段。</div>
+</fieldset>
+
+<fieldset class="cbi-section">
+	<legend>原始诊断数据</legend>
+<% for _,g in ipairs(raw_groups or {}) do %>
+	<details class="oam-sec">
+		<summary><%=esc(g.title)%></summary>
+		<pre class="oam-dump"><%=esc(g.body ~= '' and g.body or '（无输出）')%></pre>
+	</details>
+<% end %>
+</fieldset>
+
+<%+footer%>

@@ -1,0 +1,285 @@
+#!/bin/sh
+# 每个 multicast_vlan section 对应一个驱动 M-VLAN；完整重放避免残留。
+IGMP=${IGMP:-/userfs/bin/xponigmpcmd}
+LOG=/tmp/pon-multicast.log
+
+valid_vid() { [ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 4094 ] 2>/dev/null; }
+run() { echo "+ $*" >>"$LOG"; timeout 3 "$@" >>"$LOG" 2>&1; }
+select_port() { run "$IGMP" port index "$1"; }
+
+valid_port() { case "$1" in 1|2|3|4) return 0 ;; *) return 1 ;; esac; }
+
+proxy_port() {
+	port=$(uci -q get pon.multicast.proxy_port)
+	if ! valid_port "$port"; then
+		port=$(uci -q show pon 2>/dev/null | sed -n "s/^pon\.[^.=]*\.port='\([1-4]\)'$/\1/p" | head -1)
+	fi
+	valid_port "$port" || port=1
+	printf '%s\n' "$port"
+}
+
+get_port_func() {
+	valid_port "$1" || return 1
+	timeout 3 "$IGMP" port index "$1" >/dev/null 2>>"$LOG" || return $?
+	raw=$(timeout 3 "$IGMP" port show 2>>"$LOG") || return $?
+	printf '%s\n' "$raw" | sed -n 's/^function[[:space:]]*=[[:space:]]*\([012]\).*/\1/p' | head -1
+}
+
+set_port_func() {
+	select_port "$1" && run "$IGMP" port func "$2"
+}
+
+desired_port_func() {
+	want_port=$(proxy_port)
+	[ "$(uci -q get pon.multicast.proxy)" = 1 ] && [ "$1" = "$want_port" ] && echo 2 || echo 1
+}
+
+get_flag() {
+	raw=$(timeout 3 "$IGMP" flag 2>>"$LOG") || return $?
+	token=$(printf '%s\n' "$raw" | sed -n 's/.*flag[[:space:]]*=[[:space:]]*\([0-9A-Fa-fxX][0-9A-Fa-fxX]*\).*/\1/p' | tail -1)
+	[ -n "$token" ] || return 1
+	case "$token" in
+		0[xX]*) printf '%d\n' "$((token))" ;;
+		*) printf '%d\n' "$((0x$token))" ;;
+	esac
+}
+
+get_fwdmode() {
+	raw=$(timeout 3 "$IGMP" fwdtbl show 2>>"$LOG") || return $?
+	printf '%s\n' "$raw" | sed -n 's/^Current Fwd Mode:[[:space:]]*\([01]\).*/\1/p' | head -1
+}
+
+apply_control() {
+	previous_proxy_port=$1
+	snooping=$(uci -q get pon.multicast.snooping); snooping=${snooping:-1}
+	proxy=$(uci -q get pon.multicast.proxy); proxy=${proxy:-0}
+	port=$(proxy_port)
+	[ "$snooping" = 0 ] || snooping=1
+	[ "$proxy" = 1 ] && snooping=1
+
+	flag=$(get_flag) || return $?
+	if [ "$snooping" = 1 ]; then
+		newflag=$((flag & ~12))
+	else
+		newflag=$((flag | 12))
+	fi
+	if [ "$proxy" = 1 ]; then
+		newflag=$((newflag & ~64))
+	else
+		newflag=$((newflag | 64))
+	fi
+	[ "$newflag" -eq "$flag" ] || run "$IGMP" flag "$newflag" || return $?
+	run "$IGMP" fwdtbl mode "$proxy" || return $?
+	if valid_port "$previous_proxy_port" && [ "$previous_proxy_port" != "$port" ]; then
+		set_port_func "$previous_proxy_port" 1 || return $?
+	fi
+	if [ "$proxy" = 1 ]; then
+		set_port_func "$port" 2 || return $?
+	else
+		set_port_func "$port" 1 || return $?
+	fi
+
+	have_flag=$(get_flag) || return $?
+	have_mode=$(get_fwdmode) || return $?
+	have_func=$(get_port_func "$port") || return $?
+	want_func=$([ "$proxy" = 1 ] && echo 2 || echo 1)
+	[ $((have_flag & 76)) -eq $((newflag & 76)) ] && [ "$have_mode" = "$proxy" ] && [ "$have_func" = "$want_func" ] || return 1
+	[ $((have_flag & 12)) -eq 0 ] && runtime_snooping=1 || runtime_snooping=0
+	[ $((have_flag & 64)) -eq 0 ] && [ "$have_mode" = 1 ] && [ "$have_func" = 2 ] && runtime_proxy=1 || runtime_proxy=0
+	echo "$runtime_snooping,$runtime_proxy" > /tmp/pon-multicast-control
+}
+
+snapshot_control() {
+	have_flag=$(get_flag) || return $?
+	have_mode=$(get_fwdmode) || return $?
+	port=$(proxy_port)
+	have_func=$(get_port_func "$port") || return $?
+	[ $((have_flag & 12)) -eq 0 ] && runtime_snooping=1 || runtime_snooping=0
+	[ $((have_flag & 64)) -eq 0 ] && [ "$have_mode" = 1 ] && [ "$have_func" = 2 ] && runtime_proxy=1 || runtime_proxy=0
+	echo "$runtime_snooping,$runtime_proxy" > /tmp/pon-multicast-control
+}
+
+find_section() {
+	[ "$(uci -q get "pon.mvlan_$1")" = "multicast_vlan" ] && { echo "mvlan_$1"; return; }
+	i=0
+	while uci -q get "pon.@multicast_vlan[$i]" >/dev/null; do
+		[ "$(uci -q get "pon.@multicast_vlan[$i].vlan_id")" = "$1" ] && { echo "@multicast_vlan[$i]"; return; }
+		i=$((i + 1))
+	done
+}
+
+list_sections() {
+	uci -q show pon 2>/dev/null | sed -n 's/^pon\.\([^.=]*\)=multicast_vlan$/\1/p'
+}
+
+sync_services() {
+	# network.xpon_service 是业务真源；重建本后端拥有的组播 section，
+	# 手工创建且未标记 xpon_managed 的组播配置保持不变。
+	for s in $(list_sections); do
+		[ "$(uci -q get "pon.$s.xpon_managed")" = 1 ] && uci -q delete "pon.$s"
+	done
+	for s in $(uci -q show network 2>/dev/null | sed -n 's/^network\.\([^.=]*\)=xpon_service$/\1/p'); do
+		[ "$(uci -q get "network.$s.service_type")" = iptv ] || continue
+		mvid=$(uci -q get "network.$s.mcast_vlan")
+		vid=$(uci -q get "network.$s.vlan_id")
+		valid_vid "$mvid" && valid_vid "$vid" || continue
+		key=$(uci -q get "network.$s.service_key"); key=${key:-$s}
+		case "$key" in *[!A-Za-z0-9_]*|'') return 2 ;; esac
+		lan_port=$(uci -q get "network.$s.lan_port")
+		case "$lan_port" in lan1) port=1 ;; lan2) port=2 ;; lan3) port=3 ;; lan4) port=4 ;; *) port=1 ;; esac
+		enabled=$(uci -q get "network.$s.enable"); [ "$enabled" = 1 ] || enabled=0
+		ms="xpon_mvlan_$key"
+		uci set "pon.$ms=multicast_vlan"
+		uci set "pon.$ms.vlan_id=$mvid"
+		uci set "pon.$ms.interface_vid=$vid"
+		uci set "pon.$ms.bound=$enabled"
+		uci set "pon.$ms.port=$port"
+		uci set "pon.$ms.igmp_version=2"
+		uci set "pon.$ms.xpon_managed=1"
+		uci set "pon.$ms.xpon_service=$key"
+	done
+	uci commit pon
+}
+
+apply_one() {
+	s=$1
+	vid=$(uci -q get "pon.$s.vlan_id") || return 1
+	interface_vid=$(uci -q get "pon.$s.interface_vid"); interface_vid=${interface_vid:-$vid}
+	bound=$(uci -q get "pon.$s.bound"); bound=${bound:-0}
+	port=$(uci -q get "pon.$s.port"); port=${port:-1}
+	ver=$(uci -q get "pon.$s.igmp_version"); ver=${ver:-2}
+	valid_vid "$vid" || return 2
+	run "$IGMP" mvlan add "$vid" || return $?
+	select_port "$port" || return $?
+	run "$IGMP" port ver "$ver" || return $?
+	if [ "$bound" = "1" ]; then
+		run "$IGMP" port func "$(desired_port_func "$port")" || return $?
+		run "$IGMP" port vlan add "$interface_vid" || return $?
+	else
+		run "$IGMP" port vlan del "$interface_vid"
+	fi
+}
+
+status() {
+	# 配置与驱动状态由同一个 helper 输出，避免 LuCI CGI 中二次读取 UCI
+	# 失败后把已配置 M-VLAN 错判成“已注册未绑定”。
+	for s in $(list_sections); do
+		vid=$(uci -q get "pon.$s.vlan_id")
+		interface_vid=$(uci -q get "pon.$s.interface_vid"); interface_vid=${interface_vid:-$vid}
+		bound=$(uci -q get "pon.$s.bound"); bound=${bound:-0}
+		port=$(uci -q get "pon.$s.port"); port=${port:-1}
+		valid_vid "$vid" && echo "config=$vid,$interface_vid,$bound,$port"
+	done
+	timeout 3 "$IGMP" mvlan show 2>/dev/null | awk '$2 ~ /^[0-9]+$/ {print "mvlan=" $2}'
+	for port in 1 2 3 4; do
+		timeout 3 "$IGMP" port index "$port" >/dev/null 2>&1
+		timeout 3 "$IGMP" port vlan show 2>/dev/null | awk -v p="$port" '$2 ~ /^[0-9]+$/ {print "binding=" p "," $2}'
+	done
+	[ -s /tmp/pon-multicast-control ] || snapshot_control >/dev/null 2>&1
+	runtime=$(cat /tmp/pon-multicast-control 2>/dev/null)
+	if [ "$(uci -q get pon.multicast.control_saved)" = 1 ]; then
+		snooping=$(uci -q get pon.multicast.snooping); snooping=${snooping:-1}
+		proxy=$(uci -q get pon.multicast.proxy); proxy=${proxy:-0}
+		echo "control=$snooping,$proxy"
+	else
+		case "$runtime" in [01],[01]) echo "control=$runtime" ;; *) echo "control=1,0" ;; esac
+	fi
+	case "$runtime" in [01],[01]) echo "runtime_control=$runtime" ;; esac
+	port=$(proxy_port)
+	echo "proxy_port=$port"
+	func=$(get_port_func "$port" 2>/dev/null)
+	case "$func" in 0|1|2) echo "runtime_proxy_port=$port,$func" ;; esac
+}
+
+case "$1" in
+	status) status ;;
+	sync-services) sync_services ;;
+	add)
+		vid=$2; interface_vid=$3; port=${4:-1}; ver=${5:-2}; valid_vid "$vid" || exit 2
+		valid_vid "$interface_vid" || exit 2
+		[ -z "$(find_section "$vid")" ] || exit 3
+		s="mvlan_$vid"
+		uci set "pon.$s=multicast_vlan" || exit 1
+		uci set "pon.$s.vlan_id=$vid"; uci set "pon.$s.bound=1"
+		uci set "pon.$s.interface_vid=$interface_vid"
+		uci set "pon.$s.port=$port"; uci set "pon.$s.igmp_version=$ver"; uci commit pon
+		: >"$LOG"
+		apply_one "$s"
+		rc=$?
+		if [ "$rc" -ne 0 ]; then
+			uci delete "pon.$s"; uci commit pon; exit "$rc"
+		fi
+		;;
+	bind)
+		vid=$2; val=$3; s=$(find_section "$vid"); [ -n "$s" ] || exit 4
+		interface_vid=$(uci -q get "pon.$s.interface_vid"); interface_vid=${interface_vid:-$vid}
+		port=$(uci -q get "pon.$s.port"); port=${port:-1}; select_port "$port" || exit $?
+		if [ "$val" = 1 ]; then
+			run "$IGMP" port func "$(desired_port_func "$port")" && run "$IGMP" port vlan add "$interface_vid" || exit $?
+		else
+			run "$IGMP" port vlan del "$interface_vid" || exit $?
+		fi
+		uci set "pon.$s.bound=$val"; uci commit pon
+		;;
+	delete)
+		vid=$2; s=$(find_section "$vid")
+		interface_vid=$(uci -q get "pon.$s.interface_vid"); interface_vid=${interface_vid:-$vid}
+		port=$(uci -q get "pon.$s.port"); port=${port:-1}; select_port "$port"
+		run "$IGMP" port vlan del "$interface_vid"; run "$IGMP" mvlan del "$vid" || exit $?
+		[ -n "$s" ] && { uci delete "pon.$s"; uci commit pon; }
+		;;
+	control)
+		snooping=$2; proxy=$3; port=$4
+		case "$snooping:$proxy" in 0:0|1:0|1:1) : ;; *) exit 2 ;; esac
+		valid_port "$port" || exit 2
+		old_snooping=$(uci -q get pon.multicast.snooping); old_snooping=${old_snooping:-1}
+		old_proxy=$(uci -q get pon.multicast.proxy); old_proxy=${old_proxy:-0}
+		old_proxy_port=$(proxy_port)
+		old_saved=$(uci -q get pon.multicast.control_saved)
+		old_flag=$(get_flag) || exit $?
+		old_mode=$(get_fwdmode) || exit $?
+		old_port_func=$(get_port_func "$old_proxy_port") || exit $?
+		new_port_func=$(get_port_func "$port") || exit $?
+		uci set "pon.multicast.snooping=$snooping"
+		uci set "pon.multicast.proxy=$proxy"
+		uci set "pon.multicast.proxy_port=$port"
+		uci set "pon.multicast.control_saved=1"
+		uci commit pon
+		apply_control "$old_proxy_port" || {
+			rc=$?
+			uci set "pon.multicast.snooping=$old_snooping"
+			uci set "pon.multicast.proxy=$old_proxy"
+			uci set "pon.multicast.proxy_port=$old_proxy_port"
+			if [ "$old_saved" = 1 ]; then
+				uci set "pon.multicast.control_saved=1"
+			else
+				uci -q delete pon.multicast.control_saved
+			fi
+			uci commit pon
+			run "$IGMP" flag "$old_flag" >/dev/null 2>&1
+			run "$IGMP" fwdtbl mode "$old_mode" >/dev/null 2>&1
+			set_port_func "$old_proxy_port" "$old_port_func" >/dev/null 2>&1
+			[ "$port" = "$old_proxy_port" ] || set_port_func "$port" "$new_port_func" >/dev/null 2>&1
+			snapshot_control >/dev/null 2>&1
+			exit "$rc"
+		}
+		for s in $(list_sections); do
+			apply_one "$s" || exit $?
+		done
+		;;
+	snapshot-control)
+		snapshot_control
+		;;
+	apply-all)
+		: >"$LOG"
+		if [ "$(uci -q get pon.multicast.control_saved)" = 1 ]; then
+			apply_control || exit $?
+		else
+			snapshot_control || exit $?
+		fi
+		for s in $(list_sections); do
+			apply_one "$s" || exit $?
+		done
+		;;
+	*) echo "usage: $0 {status|sync-services|add MVID INTERFACE_VID [PORT VER]|bind MVID 0|1|delete MVID|control SNOOPING PROXY UNI_PORT|snapshot-control|apply-all}" >&2; exit 2 ;;
+esac

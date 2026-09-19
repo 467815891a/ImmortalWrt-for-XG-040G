@@ -1,0 +1,303 @@
+#!/bin/sh /etc/rc.common
+# xpon-luci 启动兼容与运行态重放（在 S00xponconfig 之后）：
+#   * 新版 S00 已直接采用持久认证；旧版 S00 或主路径失败时在此兜底
+#   * OMCI/OAM 就绪后重放厂商信息和 PON MAC
+#   * LED 修复（sts_green 常亮 / 上网灯触发器）
+#   * 可选：规则守护进程（xpon.fallback.enable=1 时启动）
+START=11
+STOP=89
+
+disable_factory_uenv_autostart() {
+	# 保留 init 文件供 S96bootloader 的存在性检查，但绝不允许启动时修改 env
+	# 或重启。无条件删除链接，兼容已被修改而不再含 fw_setenv onu_type 的版本。
+	if [ -e /etc/rc.d/S99uenv_update ] || [ -L /etc/rc.d/S99uenv_update ] ||
+	   [ -e /etc/rc.d/K99uenv_update ] || [ -L /etc/rc.d/K99uenv_update ]; then
+		rm -f /etc/rc.d/S99uenv_update /etc/rc.d/K99uenv_update
+		logger -t xpon "已禁用原厂 uenv_update 自动启动，避免 env 回写重启循环"
+	fi
+}
+
+
+normalize_managed_lan_ports() {
+	local meta port dev brsec current item kept changed=0
+	local managed=" "
+
+	# Upgrade configurations written by older releases before S20network reads
+	# them. A physical port must belong to either br-lan or an Access bridge,
+	# never both. Runtime brctl changes race netifd and can restart eth0 forever.
+	for meta in $(uci show network 2>/dev/null | sed -n "s/^network\.\([^.=]*\)=xpon_service$/\1/p"); do
+		[ "$(uci -q get "network.$meta.xpon_managed")" = 1 ] || continue
+		[ "$(uci -q get "network.$meta.enable")" = 1 ] || continue
+		[ "$(uci -q get "network.$meta.mode")" = bridged ] || continue
+		port=$(uci -q get "network.$meta.lan_port")
+		case "$port" in
+			lan1) dev=eth0.8 ;;
+			lan2) dev=eth0.7 ;;
+			lan3) dev=eth0.5 ;;
+			lan4) dev=eth0.4 ;;
+			*) continue ;;
+		esac
+		case "$managed" in *" $dev "*) ;; *) managed="$managed$dev " ;; esac
+	done
+	[ "$managed" != " " ] || return 0
+
+	for brsec in $(uci show network 2>/dev/null | sed -n "s/^network\.\([^.=]*\)=device$/\1/p"); do
+		[ "$(uci -q get "network.$brsec.type")" = bridge ] || continue
+		[ "$(uci -q get "network.$brsec.name")" = br-lan ] && break
+		brsec=
+	done
+	[ -n "$brsec" ] || return 0
+
+	current=$(uci -q get "network.$brsec.ports")
+	kept=
+	for item in $current; do
+		case "$managed" in
+			*" $item "*) changed=1 ;;
+			*) kept="$kept $item" ;;
+		esac
+	done
+	[ "$changed" = 1 ] || return 0
+
+	uci -q delete "network.$brsec.ports"
+	for item in $kept; do uci add_list "network.$brsec.ports=$item"; done
+	uci commit network
+	logger -t xpon "已从 br-lan 持久配置移除受管端口，避免 netifd 桥成员循环"
+}
+
+PONMGR_CACHE_DIR=/tmp/xpon_ponmgr_cache
+
+cache_ponmgr() {
+	local key="$1" tmp stamp blocked now last
+	shift
+	blocked="$PONMGR_CACHE_DIR/.$key.blocked"
+	now=$(date +%s)
+	last=$(cat "$blocked" 2>/dev/null)
+	case "$last" in
+		''|*[!0-9]*) ;;
+		*) [ $((now - last)) -lt 300 ] && return 0 ;;
+	esac
+	tmp="$PONMGR_CACHE_DIR/.$key.$$"
+	stamp="$PONMGR_CACHE_DIR/.$key.updated.$$"
+	if timeout 3 /userfs/bin/ponmgr "$@" >"$tmp" 2>&1 && [ -s "$tmp" ]; then
+		mv -f "$tmp" "$PONMGR_CACHE_DIR/$key"
+		rm -f "$blocked"
+		date +%s >"$stamp"
+		mv -f "$stamp" "$PONMGR_CACHE_DIR/$key.updated"
+	else
+		rm -f "$tmp" "$stamp"
+		printf '%s\n' "$now" >"$blocked"
+	fi
+}
+
+refresh_gpon_core() {
+	cache_ponmgr gpon_info gpon get info
+	cache_ponmgr gpon_omcc gpon get omcc
+	cache_ponmgr gpon_tcont gpon get tcont
+	cache_ponmgr gpon_gemport gpon get gemport
+	cache_ponmgr gpon_fec_status gpon get fec_status
+	cache_ponmgr gpon_WanCnt gpon get WanCnt
+}
+
+refresh_gpon_extended() {
+	cache_ponmgr gpon_sys_link_cfg gpon get sys_link_cfg
+	cache_ponmgr gpon_onlineDuration gpon get onlineDuration
+	cache_ponmgr gpon_PloamGtcInfo gpon get PloamGtcInfo
+	cache_ponmgr gpon_key_info gpon get key_info
+	cache_ponmgr gpon_AllTcontTxCnt gpon get AllTcontTxCnt
+	cache_ponmgr gpon_fecCnt gpon get fecCnt
+	cache_ponmgr gpon_rx_fec_cfg gpon get rx_fec_cfg
+	cache_ponmgr gpon_phyTransParams gpon get phyTransParams
+	cache_ponmgr gpon_DrvPowerLevel gpon get DrvPowerLevel
+	cache_ponmgr gpon_rsp_time gpon get rsp_time
+	cache_ponmgr gpon_eqd_off gpon get eqd_off
+	cache_ponmgr gpon_spf gpon get spf
+	cache_ponmgr gpon_tod_info gpon get tod_info
+}
+
+refresh_ponmgr_status() {
+	local mode tmp=/tmp/epon_reg_auth_status.$$ cycle=0 now last blocked
+	mkdir -p "$PONMGR_CACHE_DIR"
+	while true; do
+		mode=$(cat /proc/tc3162/sys_xpon_mode 2>/dev/null)
+		case "$mode" in
+			2|3|4|5|12)
+				blocked="$PONMGR_CACHE_DIR/.epon_llid_info.blocked"
+				now=$(date +%s); last=$(cat "$blocked" 2>/dev/null)
+				case "$last" in
+					''|*[!0-9]*)
+						if timeout 3 /userfs/bin/ponmgr epon get llid_info >"$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+							mv -f "$tmp" /tmp/epon_reg_auth_status
+							rm -f "$blocked"
+						else
+							rm -f "$tmp"
+							printf '%s\n' "$now" >"$blocked"
+						fi
+						;;
+					*) [ $((now - last)) -ge 300 ] && rm -f "$blocked" ;;
+				esac
+				if [ ! -s /tmp/epon_reg_auth_status ]; then
+					printf 'LLID = N/A\n' >"$tmp"
+					mv -f "$tmp" /tmp/epon_reg_auth_status
+				fi
+				cache_ponmgr epon_devMac epon get devMac
+				cycle=0
+				;;
+			1|6|7|8|9|10|11)
+				rm -f "$tmp" /tmp/epon_reg_auth_status
+				refresh_gpon_core
+				if [ "$cycle" -eq 0 ]; then
+					refresh_gpon_extended
+				fi
+				cycle=$(( (cycle + 1) % 10 ))
+				;;
+			*)
+				# Unknown/initializing mode: do not touch ponmgr until the driver
+				# exposes a confirmed technology.
+				rm -f "$tmp" /tmp/epon_reg_auth_status
+				;;
+		esac
+		sleep 30
+	done
+}
+
+start_ponmgr_status_refresher() {
+	local pid oldpid
+	pid=$(cat /var/run/xpon-ponmgr-status.pid 2>/dev/null)
+	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
+	oldpid=$(cat /var/run/xpon-epon-status.pid 2>/dev/null)
+	[ -n "$oldpid" ] && kill "$oldpid" 2>/dev/null
+	refresh_ponmgr_status >/dev/null 2>&1 &
+	echo $! >/var/run/xpon-ponmgr-status.pid
+}
+
+is_vendor_wan_name() {
+	local iface="$1" bank
+	case "$iface" in
+		nas[1-9]*_[0-7])
+			bank="${iface#nas}"
+			bank="${bank%_*}"
+			case "$bank" in *[!0-9]*) return 1 ;; esac
+			;;
+		*) return 1 ;;
+	esac
+}
+
+find_configured_default_wan() {
+	local preferred pass first meta iface key
+	preferred="$(uci -q get xpon.ppe.default_wan_itf)"
+
+	for pass in internet any; do
+		first=
+		for meta in $(uci show network 2>/dev/null | sed -n "s/^network\.\([^.=]*\)=xpon_service$/\1/p"); do
+			[ "$(uci -q get "network.$meta.xpon_managed")" = 1 ] || continue
+			[ "$(uci -q get "network.$meta.enable")" != 0 ] || continue
+			[ "$(uci -q get "network.$meta.mode")" = routed ] || continue
+			[ "$(uci -q get "network.$meta.proto")" = pppoe ] || continue
+			if [ "$pass" = internet ]; then
+				[ "$(uci -q get "network.$meta.service_type")" = internet ] || continue
+			fi
+
+			iface="$(uci -q get "network.$meta.interface")"
+			key="$(uci -q get "network.$meta.service_key")"
+			is_vendor_wan_name "$iface" || continue
+			[ "$key" = "$iface" ] || continue
+			[ "$(uci -q get "network.$meta.xpon_service")" = "$iface" ] || continue
+			[ "$(uci -q get "network.$iface.xpon_managed")" = 1 ] || continue
+			[ "$(uci -q get "network.$iface.xpon_service")" = "$iface" ] || continue
+			[ "$(uci -q get "network.$iface.proto")" = pppoe ] || continue
+			[ "$(uci -q get "network.$iface.pppname")" = "$iface" ] || continue
+			[ "$(uci -q get "network.$iface.auto")" != 0 ] || continue
+
+			[ "$iface" = "$preferred" ] && {
+				printf '%s\n' "$iface"
+				return 0
+			}
+			[ -n "$first" ] || first="$iface"
+		done
+		[ -z "$first" ] || {
+			printf '%s\n' "$first"
+			return 0
+		}
+	done
+	return 1
+}
+
+sync_default_wan_itf() {
+	local current selected
+	current="$(uci -q get xpon.ppe.default_wan_itf)"
+	selected="$(find_configured_default_wan 2>/dev/null || true)"
+	[ "$current" = "$selected" ] && return 0
+
+	uci -q get xpon.ppe >/dev/null || uci set xpon.ppe=ppe
+	if [ -n "$selected" ]; then
+		uci set "xpon.ppe.default_wan_itf=$selected"
+		logger -t xpon "selected PPE default WAN $selected"
+	else
+		uci -q delete xpon.ppe.default_wan_itf
+		logger -t xpon "cleared invalid PPE default WAN"
+	fi
+	uci commit xpon
+}
+
+start_fe_wan_binding() {
+	[ -x /usr/bin/xg2010g-tlsfix.sh ] || return 0
+	(
+		i=0
+		while [ "$i" -lt 30 ]; do
+			/usr/bin/xg2010g-tlsfix.sh apply && exit 0
+			i=$((i + 1))
+			sleep 1
+		done
+		logger -t xpon "PPE default WAN binding timed out"
+	) >/dev/null 2>&1 &
+}
+
+start() {
+	disable_factory_uenv_autostart
+	[ -f /etc/config/xpon ] || [ ! -x /etc/uci-defaults/zzz-xpon ] || /etc/uci-defaults/zzz-xpon
+	[ -f /etc/config/xpon ] || return 0
+	# New services are written directly as nasX_Y. Existing interface names are
+	# intentionally left untouched at boot.
+	normalize_managed_lan_ports
+	# preinit 未能读取 DSD 时再补建一次。
+	[ -s /tmp/dsd.env ] || /usr/bin/xpon-dsd-env.sh
+	# 新版 S00 会在 S20network 前恢复认证并留下标记；没有标记说明仍是
+	# 旧版原厂脚本，或主路径失败，需要维持原有兼容兜底。
+	if [ ! -e /tmp/.xponconfig-persistent-auth ]; then
+		/usr/bin/xpon-apply.sh restore-auth || logger -t xpon "兼容认证恢复失败；将继续等待引擎并尝试设备层重放"
+	else
+		logger -t xpon "S00 已恢复持久认证，跳过 S11 兼容覆盖"
+	fi
+	/usr/bin/xpon-apply.sh leds
+	# 不在开机自动执行 xpon-replay：它会调用 xpon-apply auth -> OMCI
+	# set reconfig，厂商 5.4 路径会因此重新初始化共享 eth0 MAC。认证配置
+	# 仍由 S00/xpon-apply restore-auth 恢复；LuCI 保存时再显式应用运行态。
+	# GPON OMCI shared-memory identity may be reset after the first replay.
+	# Track omci restarts and repair SN/Vendor ID drift in-place.
+	/usr/bin/xpon-gpon-identity-watch.sh watch 5 >/dev/null 2>&1 &
+	# netifd/vendor control paths may restart epon_oam again after the initial
+	# replay. Track process changes and restore the complete OAM identity.
+	/usr/bin/xpon-epon-sn.sh watch 5 >/dev/null 2>&1 &
+	sync_default_wan_itf
+	start_ponmgr_status_refresher
+	start_fe_wan_binding
+	[ "$(uci -q get xpon.fallback.enable)" = "1" ] && /usr/bin/xpon-fallback.sh &
+}
+
+stop() {
+	status_pid=$(cat /var/run/xpon-ponmgr-status.pid 2>/dev/null)
+	[ -n "$status_pid" ] && kill "$status_pid" 2>/dev/null
+	status_pid=$(cat /var/run/xpon-epon-status.pid 2>/dev/null)
+	[ -n "$status_pid" ] && kill "$status_pid" 2>/dev/null
+	rm -f /var/run/xpon-ponmgr-status.pid /var/run/xpon-epon-status.pid /tmp/epon_reg_auth_status
+	rm -f "$PONMGR_CACHE_DIR"/* "$PONMGR_CACHE_DIR"/.[!.]* 2>/dev/null
+	rmdir "$PONMGR_CACHE_DIR" 2>/dev/null
+	watch_pid=$(cat /var/run/xpon-epon-sn-watch.pid 2>/dev/null)
+	[ -n "$watch_pid" ] && kill "$watch_pid" 2>/dev/null
+	rm -f /var/run/xpon-epon-sn-watch.pid
+	watch_pid=$(cat /var/run/xpon-gpon-identity-watch.pid 2>/dev/null)
+	[ -n "$watch_pid" ] && kill "$watch_pid" 2>/dev/null
+	rm -f /var/run/xpon-gpon-identity-watch.pid
+	killall xpon-fallback.sh 2>/dev/null
+	killall xpon-fallback 2>/dev/null
+}

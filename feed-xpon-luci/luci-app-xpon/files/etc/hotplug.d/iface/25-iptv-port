@@ -1,0 +1,5 @@
+#!/bin/sh
+# Bridge membership is persistent UCI state managed by netifd. Do not move
+# ports from iface hotplug: doing so recursively retriggers interface events.
+[ "$ACTION" = "ifup" ] || exit 0
+exit 0

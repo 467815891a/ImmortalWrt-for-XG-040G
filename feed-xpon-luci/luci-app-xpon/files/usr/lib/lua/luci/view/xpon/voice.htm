@@ -1,0 +1,259 @@
+<%+header%>
+<%
+local function esc(s)
+	return (tostring(s or ""):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;"))
+end
+local function field_name(line, name)
+	return "line" .. tostring(line) .. "_" .. name
+end
+local function sdk_name(section, key)
+	return "sdk_" .. tostring(section) .. "_" .. tostring(key)
+end
+%>
+<script type="text/javascript" src="<%=resource%>/view/xpon.js?v=<%=devstamp or "20260827-dark"%>"></script>
+<style>
+.xpon-voice-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px 14px}
+.xpon-voice-grid .cbi-value{padding:0;margin:0;border:0}
+.xpon-voice-grid .cbi-value-title{display:block;width:auto;margin-bottom:4px;font-weight:600}
+.xpon-voice-grid .cbi-value-field{margin-left:0}
+.xpon-voice-grid input,.xpon-voice-grid select{max-width:100%;width:100%}
+.xpon-codec-table input[type=number]{width:72px}
+.xpon-codec-table select{min-width:76px}
+</style>
+
+<h2 name="content">PON设置 — 语音</h2>
+<br />
+
+<% if saved then %>
+	<div class="alert-message">两路语音参数已保存，VOICE 业务已重载，sipclient 正在重新读取配置。</div>
+<% end %>
+<% if err then %>
+	<div class="alert-message error">保存被拒绝：<b><%=esc(err)%></b> 字段格式不合法或配置文件不可写。</div>
+<% end %>
+
+<div class="alert-message">
+	SDK 启动脚本会读取 <code>/proc/fxs/fxsNum</code>，并按 FXS/FXO 总数设置最大语音线路和账号数。
+	当前页面按 MTK DSP 双 FXS 设计，检测到 <b><%=esc(v.line_count)%></b> 路，支持分别配置 FXS 1 和 FXS 2。
+	语音 VLAN：<b><%=esc(v.vlan ~= "" and v.vlan or "未配置")%></b>。
+</div>
+
+<form class="cbi-map" method="post" action="save" onsubmit="return xponVoiceCheck(this)" id="voiceform">
+	<input type="hidden" name="token" value="<%=token%>" />
+	<input type="hidden" name="page" value="voice" />
+
+<% for line = 1, 2 do
+	local a = v.lines[line]
+%>
+	<fieldset class="cbi-section xpon-voice-line">
+		<legend>FXS <%=line%> 语音账号</legend>
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="<%=field_name(line, 'enable')%>">线路注册</label>
+			<div class="cbi-value-field">
+				<select id="<%=field_name(line, 'enable')%>" name="<%=field_name(line, 'enable')%>" class="cbi-input-select">
+					<option value="1"<% if a.enable == "1" then %> selected="selected"<% end %>>启用</option>
+					<option value="0"<% if a.enable ~= "1" then %> selected="selected"<% end %>>禁用</option>
+				</select>
+				<div class="cbi-value-description"><% if line == 2 then %>对应 SDK 的 <code>VoIPLine2Enable</code>；设备为双 FXS 时启用。<% else %>线路 1 兼容旧配置 <code>xpon.voice_auth</code>。<% end %></div>
+			</div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="<%=field_name(line, 'registrar')%>">注册服务器 / 主用服务器</label>
+			<div class="cbi-value-field"><input id="<%=field_name(line, 'registrar')%>" name="<%=field_name(line, 'registrar')%>" class="cbi-input-text" maxlength="255" value="<%=esc(a.registrar)%>" placeholder="如 gd.ctcims.cn" /></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="<%=field_name(line, 'proxy')%>">主用服务器地址</label>
+			<div class="cbi-value-field"><input id="<%=field_name(line, 'proxy')%>" name="<%=field_name(line, 'proxy')%>" class="cbi-input-text" maxlength="255" value="<%=esc(a.proxy)%>" placeholder="如 gd.ctcims.cn；可留空使用注册服务器" /></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="<%=field_name(line, 'domain')%>">归属域名</label>
+			<div class="cbi-value-field"><input id="<%=field_name(line, 'domain')%>" name="<%=field_name(line, 'domain')%>" class="cbi-input-text" maxlength="255" value="<%=esc(a.domain)%>" placeholder="如 gd.ctcims.cn" /></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="<%=field_name(line, 'outbound_proxy')%>">Outbound 服务器地址</label>
+			<div class="cbi-value-field"><input id="<%=field_name(line, 'outbound_proxy')%>" name="<%=field_name(line, 'outbound_proxy')%>" class="cbi-input-text" maxlength="255" value="<%=esc(a.outbound_proxy)%>" placeholder="如 bac16.dg.gd.ctcims.cn" /></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="<%=field_name(line, 'uri')%>">URI</label>
+			<div class="cbi-value-field"><input id="<%=field_name(line, 'uri')%>" name="<%=field_name(line, 'uri')%>" class="cbi-input-text" maxlength="128" value="<%=esc(a.uri)%>" placeholder="+86***********" /></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="<%=field_name(line, 'register_username')%>">注册用户名</label>
+			<div class="cbi-value-field"><input id="<%=field_name(line, 'register_username')%>" name="<%=field_name(line, 'register_username')%>" class="cbi-input-text" maxlength="128" value="<%=esc(a.register_username)%>" placeholder="+86***********@gd.ctcims.cn" /></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="<%=field_name(line, 'username')%>">SIP 用户名</label>
+			<div class="cbi-value-field"><input id="<%=field_name(line, 'username')%>" name="<%=field_name(line, 'username')%>" class="cbi-input-text" maxlength="128" value="<%=esc(a.username)%>" placeholder="可与注册用户名一致" /></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="<%=field_name(line, 'auth_username')%>">鉴权用户名</label>
+			<div class="cbi-value-field"><input id="<%=field_name(line, 'auth_username')%>" name="<%=field_name(line, 'auth_username')%>" class="cbi-input-text" maxlength="128" value="<%=esc(a.auth_username)%>" placeholder="+86***********@gd.ctcims.cn" /></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="<%=field_name(line, 'password')%>">鉴权密码</label>
+			<div class="cbi-value-field">
+				<input id="<%=field_name(line, 'password')%>" name="<%=field_name(line, 'password')%>" type="password" class="cbi-input-text" maxlength="128" autocomplete="new-password" placeholder="<%=a.password_set and '已配置（留空保持原值）' or '请输入 SIP 密码'%>" />
+				<div class="cbi-value-description"><%=a.password_set and "当前密码已配置，不在页面显示；留空表示保持原密码。" or "当前尚未配置密码。"%></div>
+			</div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="<%=field_name(line, 'display_name')%>">显示名称</label>
+			<div class="cbi-value-field"><input id="<%=field_name(line, 'display_name')%>" name="<%=field_name(line, 'display_name')%>" class="cbi-input-text" maxlength="64" value="<%=esc(a.display_name)%>" placeholder="可选，如家庭电话 <%=line%>" /></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="<%=field_name(line, 'transport')%>">传输协议</label>
+			<div class="cbi-value-field">
+				<select id="<%=field_name(line, 'transport')%>" name="<%=field_name(line, 'transport')%>" class="cbi-input-select">
+					<option value="udp"<% if a.transport == "udp" then %> selected="selected"<% end %>>UDP</option>
+					<option value="tcp"<% if a.transport == "tcp" then %> selected="selected"<% end %>>TCP</option>
+					<option value="tls"<% if a.transport == "tls" then %> selected="selected"<% end %>>TLS</option>
+				</select>
+			</div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="<%=field_name(line, 'port')%>">SIP 端口</label>
+			<div class="cbi-value-field"><input id="<%=field_name(line, 'port')%>" name="<%=field_name(line, 'port')%>" type="number" min="1" max="65535" class="cbi-input-text" value="<%=esc(a.port)%>" /></div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="<%=field_name(line, 'expires')%>">注册周期</label>
+			<div class="cbi-value-field"><input id="<%=field_name(line, 'expires')%>" name="<%=field_name(line, 'expires')%>" type="number" min="60" max="86400" class="cbi-input-text" value="<%=esc(a.expires)%>" /><div class="cbi-value-description">单位：秒，范围 60~86400。</div></div>
+		</div>
+	</fieldset>
+<% end %>
+
+	<fieldset class="cbi-section">
+		<legend>SDK 公共语音参数</legend>
+		<div class="alert-message">
+			以下字段按原厂 section 名保存，例如 <code>VoIPBasic_Common</code>、<code>VoIPMedia_Common</code>、<code>VoIPDigitMap_Entry</code>；
+			保存后会随 VOICE 业务重载，便于 SDK/sipclient 读取。
+		</div>
+<% for _, def in ipairs(v.sdk_common_defs or {}) do
+	local vals = (v.sdk_common or {})[def.section] or {}
+%>
+		<fieldset class="cbi-section">
+			<legend><%=esc(def.title)%>（<code><%=esc(def.section)%></code>）</legend>
+			<div class="xpon-voice-grid">
+<% for _, f in ipairs(def.fields or {}) do
+	local name = sdk_name(def.section, f.key)
+	local value = vals[f.key] or f.default or ""
+%>
+				<div class="cbi-value">
+					<label class="cbi-value-title" for="<%=name%>"><%=esc(f.label)%></label>
+					<div class="cbi-value-field">
+<% if f.kind == "select" then %>
+						<select id="<%=name%>" name="<%=name%>" class="cbi-input-select">
+<% for _, opt in ipairs(f.options or {}) do %>
+							<option value="<%=esc(opt[1])%>"<% if value == opt[1] then %> selected="selected"<% end %>><%=esc(opt[2])%></option>
+<% end %>
+						</select>
+<% elseif f.kind == "number" then %>
+						<input id="<%=name%>" name="<%=name%>" type="number" class="cbi-input-text" value="<%=esc(value)%>"<% if f.min then %> min="<%=esc(f.min)%>"<% end %><% if f.max then %> max="<%=esc(f.max)%>"<% end %> />
+<% else %>
+						<input id="<%=name%>" name="<%=name%>" class="cbi-input-text" maxlength="<%=esc(f.max_len or 255)%>" value="<%=esc(value)%>" />
+<% end %>
+						<div class="cbi-value-description"><code><%=esc(f.key)%></code></div>
+					</div>
+				</div>
+<% end %>
+			</div>
+		</fieldset>
+<% end %>
+	</fieldset>
+
+	<fieldset class="cbi-section">
+		<legend>每线路高级参数</legend>
+<% for line = 1, 2 do %>
+		<fieldset class="cbi-section">
+			<legend>FXS <%=line%> SDK 参数</legend>
+<% for _, def in ipairs(v.sdk_line_defs or {}) do
+	local section = def.prefix .. tostring(line - 1)
+	local vals = (((v.sdk_lines or {})[line] or {})[section]) or {}
+%>
+			<fieldset class="cbi-section">
+				<legend><%=esc(def.title)%>（<code><%=esc(section)%></code>）</legend>
+				<div class="xpon-voice-grid">
+<% for _, f in ipairs(def.fields or {}) do
+	local name = sdk_name(section, f.key)
+	local value = vals[f.key] or f.default or ""
+%>
+					<div class="cbi-value">
+						<label class="cbi-value-title" for="<%=name%>"><%=esc(f.label)%></label>
+						<div class="cbi-value-field">
+<% if f.kind == "select" then %>
+							<select id="<%=name%>" name="<%=name%>" class="cbi-input-select">
+<% for _, opt in ipairs(f.options or {}) do %>
+								<option value="<%=esc(opt[1])%>"<% if value == opt[1] then %> selected="selected"<% end %>><%=esc(opt[2])%></option>
+<% end %>
+							</select>
+<% elseif f.kind == "number" then %>
+							<input id="<%=name%>" name="<%=name%>" type="number" class="cbi-input-text" value="<%=esc(value)%>"<% if f.min then %> min="<%=esc(f.min)%>"<% end %><% if f.max then %> max="<%=esc(f.max)%>"<% end %> />
+<% else %>
+							<input id="<%=name%>" name="<%=name%>" class="cbi-input-text" maxlength="<%=esc(f.max_len or 255)%>" value="<%=esc(value)%>" />
+<% end %>
+							<div class="cbi-value-description"><code><%=esc(f.key)%></code></div>
+						</div>
+					</div>
+<% end %>
+				</div>
+			</fieldset>
+<% end %>
+		</fieldset>
+<% end %>
+	</fieldset>
+
+	<fieldset class="cbi-section">
+		<legend>语音编码器 Codec</legend>
+<% for pvc = 0, 1 do
+	local c = (v.codecs or {})[pvc + 1] or { ptime = "20", rows = {} }
+%>
+		<fieldset class="cbi-section">
+			<legend>PVC <%=pvc%>（<code>VoIPCodecs_PVC<%=pvc%></code>）</legend>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="codec_pvc<%=pvc%>_ptime">包化时间</label>
+				<div class="cbi-value-field">
+					<input id="codec_pvc<%=pvc%>_ptime" name="codec_pvc<%=pvc%>_ptime" type="number" min="10" max="200" class="cbi-input-text" value="<%=esc(c.ptime)%>" />
+					<div class="cbi-value-description">对应 <code>SIPPacketizationTime</code>，单位 ms。</div>
+				</div>
+			</div>
+			<table class="cbi-section-table xpon-codec-table">
+				<thead><tr><th>Codec</th><th>启用</th><th>优先级</th><th>原厂 section</th></tr></thead>
+				<tbody>
+<% for idx, row in ipairs(c.rows or {}) do
+	local n = idx - 1
+%>
+					<tr>
+						<td><%=esc(row.codec)%><input type="hidden" name="codec_pvc<%=pvc%>_entry<%=n%>_codec" value="<%=esc(row.codec)%>" /></td>
+						<td>
+							<select name="codec_pvc<%=pvc%>_entry<%=n%>_enable" class="cbi-input-select">
+								<option value="Yes"<% if row.Enable == "Yes" then %> selected="selected"<% end %>>启用</option>
+								<option value="No"<% if row.Enable ~= "Yes" then %> selected="selected"<% end %>>禁用</option>
+							</select>
+						</td>
+						<td><input name="codec_pvc<%=pvc%>_entry<%=n%>_priority" type="number" min="0" max="9" class="cbi-input-text" value="<%=esc(row.priority)%>" /></td>
+						<td><code><%=esc(row.section)%></code></td>
+					</tr>
+<% end %>
+				</tbody>
+			</table>
+		</fieldset>
+<% end %>
+	</fieldset>
+
+	<div class="cbi-page-actions">
+		<input type="submit" class="cbi-button cbi-button-apply" value="保存并应用" />
+		<input type="reset" class="cbi-button cbi-button-reset" value="重置表单" />
+	</div>
+</form>
+
+<fieldset class="cbi-section">
+	<legend>运行状态</legend>
+	<div class="cbi-value">
+		<label class="cbi-value-title">sipclient</label>
+		<div class="cbi-value-field">
+			<span class="cbi-input-text"><%=v.running and "运行中" or "未检测到进程"%></span>
+			<div class="cbi-value-description">PID：<code><%=esc(v.pid ~= "" and v.pid or "—")%></code>。应用日志：<code>/tmp/xpon-voice-apply.log</code>。</div>
+		</div>
+	</div>
+</fieldset>
+
+<script type="text/javascript">xponVoiceCaptureInit(document.getElementById('voiceform'));</script>
+<%+footer%>

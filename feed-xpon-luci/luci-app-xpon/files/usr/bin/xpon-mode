@@ -1,0 +1,82 @@
+#!/bin/sh
+# xpon-mode —— PON设置 模式一键切换（TTL/SSH 命令行版，对应 LuCI“模式”页）
+#
+# 用法：
+#   xpon-mode                    # 查看当前模式状态
+#   xpon-mode <hex>              # 写入 onu_type 到 U-Boot env（重启后生效）
+#   xpon-mode <hex> -r|--reboot  # 写入并立即重启
+#
+# 原理：PON 模式来自 U-Boot 的 onu_type bootarg 字节（非 DTS），
+#   onu_type 字节定义：
+#     bits[1:0]：ONU 类型 1=SFU  2=HGU
+#     bits[7:4]：PON 模式 1=GPON  2=1G-EPON  3=10G/1G-EPON
+#               4=10G/10G-EPON  5=1G/1G-EPON  6=XGPON(10G/2.5G 不对称)
+#               7=XGSPON(10G 对称) C=TURBO-EPON
+#   EPON 模式 2/3/4/5/C 均使用 OAM 认证；具体速率必须与 OLT 端口能力一致。
+#   出厂 71=SFU+XGSPON；本机 TTL 当前 61=SFU+XGPON；
+#   联通 HGU 家庭网关（LAN 桥接+VEIP+组播）应切 62=HGU+XGPON。
+
+set -u
+
+status() {
+	echo "==== PON设置 模式 ===="
+	printf '%-18s: %s\n' "env onu_type" "$(fw_printenv onu_type 2>/dev/null || echo N/A)"
+	printf '%-18s: %s\n' "本次 cmdline" "$(grep -o 'onu_type=[0-9a-fA-F]*' /proc/cmdline 2>/dev/null | head -1 || echo N/A)"
+	printf '%-18s: %s\n' "驱动 sys_xpon_mode" "$(cat /proc/tc3162/sys_xpon_mode 2>/dev/null || echo N/A)"
+	printf '%-18s: %s\n' "xpon 模块" "$(lsmod 2>/dev/null | grep -E 'xpon(_10g)?' | awk '{print $1}' | tr '\n' ' ')"
+	printf '%-18s: %s\n' "BBF247 gpon" "$(cat /proc/gpon/bbf247Flag 2>/dev/null || echo N/A)"
+	printf '%-18s: %s\n' "BBF247 xgpon" "$(cat /proc/xgpon/bbf247Flag 2>/dev/null || echo N/A)"
+	echo
+	echo "模式速查（HGU=末尾2 SFU=末尾1）："
+	echo "  62=HGU+XGPON(推荐)  61=SFU+XGPON(本机当前)"
+	echo "  72=HGU+XGSPON       71=SFU+XGSPON(出厂)"
+	echo "  12=HGU+GPON(实验)   11=SFU+GPON(实验)"
+	echo "  42=HGU+10G/10G-EPON 41=SFU+10G/10G-EPON（实验：XEPON 对称，需 10G-EPON OLT+OAM）"
+	echo "  32=HGU+10G/1G-EPON  31=SFU+10G/1G-EPON （实验：XEPON 不对称）"
+	echo "  22/21=1G-EPON"
+	echo "  52/51=1G/1G-EPON   c2/c1=TURBO-EPON"
+}
+
+apply() {
+	local val="$1"
+	case "$val" in
+		[0-9a-fA-F][0-9a-fA-F]) ;;
+		*) echo "错误：onu_type 需为 2 位十六进制（如 61 / 71）" >&2; exit 1 ;;
+	esac
+	command -v fw_setenv >/dev/null 2>&1 || {
+		echo "错误：fw_setenv 不可用（缺 uboot-envtools 或 fw_env.config）" >&2
+		exit 1
+	}
+	/usr/bin/xpon-apply.sh ponmode "$val" || {
+		echo "错误：写入失败" >&2
+		exit 1
+	}
+	echo "已写入 U-Boot env：onu_type=$val（重启后生效）"
+	echo "确认新值：$(fw_printenv onu_type 2>/dev/null)"
+	echo
+	echo "警告："
+	echo "  1) 必须与 OLT 端口能力一致，否则重启后可能无法 O5。"
+	echo "  2) SFU 变体(末尾1)无 VEIP/LAN 侧组播引擎，联通 HGU 业务请用 HGU(末尾2)值。"
+	echo "  3) 恢复方法（U-Boot 提示符）：setenv onu_type 62; saveenv; reset"
+}
+
+case "${1:-}" in
+	"")
+		status
+		;;
+	-r|--reboot)
+		echo "错误：缺少 onu_type 值，用法 xpon-mode <hex> -r" >&2
+		exit 1
+		;;
+	*)
+		apply "$1"
+		if [ "${2:-}" = "-r" ] || [ "${2:-}" = "--reboot" ]; then
+			echo
+			echo "3 秒后重启…（Ctrl-C 取消）"
+			sleep 3
+			reboot
+		fi
+		;;
+esac
+
+exit 0

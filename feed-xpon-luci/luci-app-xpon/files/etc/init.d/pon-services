@@ -1,0 +1,86 @@
+#!/bin/sh /etc/rc.common
+START=95
+USE_PROCD=0
+
+IGMP=/userfs/bin/xponigmpcmd
+
+apply_multicast() {
+	local enabled vlan service_vlan ver port rc=0 old persisted old_service_vlan old_port proxy proxy_port func
+	enabled=$(uci -q get pon.multicast.enabled); enabled=${enabled:-0}
+	vlan=$(uci -q get pon.multicast.vlan_id)
+	ver=$(uci -q get pon.multicast.igmp_version); ver=${ver:-2}
+	port=$(uci -q get pon.multicast.port); port=${port:-1}
+	proxy=$(uci -q get pon.multicast.proxy); proxy=${proxy:-0}
+	proxy_port=$(uci -q get pon.multicast.proxy_port); proxy_port=${proxy_port:-1}
+	service_vlan=$(uci -q get xpon.iptv.vlan)
+
+	# 清除本插件上一次登记的 M-VLAN，避免重启/修改后残留。
+	old=$(cat /tmp/pon-services-mvlan 2>/dev/null)
+	persisted=$(uci -q get pon.multicast.applied_vlan)
+	old_service_vlan=$(uci -q get pon.multicast.applied_service_vlan)
+	old_port=$(uci -q get pon.multicast.applied_port)
+	[ -n "$old" ] && "$IGMP" mvlan del "$old" >/tmp/pon-services-command.log 2>&1
+	[ -n "$persisted" ] && [ "$persisted" != "$old" ] && "$IGMP" mvlan del "$persisted" >>/tmp/pon-services-command.log 2>&1
+	if [ -n "$old_port" ]; then
+		"$IGMP" port index "$old_port" >>/tmp/pon-services-command.log 2>&1
+		[ -n "$old_service_vlan" ] && "$IGMP" port vlan del "$old_service_vlan" >>/tmp/pon-services-command.log 2>&1
+		func=1; [ "$proxy" = 1 ] && [ "$old_port" = "$proxy_port" ] && func=2
+		"$IGMP" port func "$func" >>/tmp/pon-services-command.log 2>&1
+	fi
+	rm -f /tmp/pon-services-mvlan
+	if [ "$enabled" != "1" ]; then
+		uci -q delete pon.multicast.applied_vlan
+		uci -q delete pon.multicast.applied_service_vlan
+		uci -q delete pon.multicast.applied_port
+		uci -q commit pon
+		return 0
+	fi
+	[ -x "$IGMP" ] || { echo "xponigmpcmd 不存在" >/tmp/pon-services-command.log; return 127; }
+	[ "$vlan" -ge 1 ] 2>/dev/null && [ "$vlan" -le 4094 ] 2>/dev/null || { echo "组播 VLAN 非法" >/tmp/pon-services-command.log; return 2; }
+
+	"$IGMP" mvlan add "$vlan" >/tmp/pon-services-command.log 2>&1 || rc=$?
+	# 设备 CLI 先用 port index 选择 UNI，再设置属性；把端口作为 ver/func 的
+	# 第一个参数会返回 0 但被静默忽略，实际仍为 version/function=-1。
+	[ "$rc" -eq 0 ] && "$IGMP" port index "$port" >>/tmp/pon-services-command.log 2>&1 || rc=$?
+	[ "$rc" -eq 0 ] && "$IGMP" port ver "$ver" >>/tmp/pon-services-command.log 2>&1 || rc=$?
+	func=1; [ "$proxy" = 1 ] && [ "$port" = "$proxy_port" ] && func=2
+	[ "$rc" -eq 0 ] && "$IGMP" port func "$func" >>/tmp/pon-services-command.log 2>&1 || rc=$?
+	# M-VLAN 是下行组播白名单；UNI 仍需绑定 IPTV 业务 VLAN，IGMP Join
+	# 才能关联到正确的 PON 业务。命令：port vlan add <vid>。
+	if [ "$rc" -eq 0 ] && [ -n "$service_vlan" ]; then
+		[ "$service_vlan" -ge 1 ] 2>/dev/null && [ "$service_vlan" -le 4094 ] 2>/dev/null || rc=2
+		[ "$rc" -eq 0 ] && "$IGMP" port vlan add "$service_vlan" >>/tmp/pon-services-command.log 2>&1 || rc=$?
+	fi
+	[ "$rc" -eq 0 ] && "$IGMP" port show >>/tmp/pon-services-command.log 2>&1 || rc=$?
+	[ "$rc" -eq 0 ] && "$IGMP" port vlan show >>/tmp/pon-services-command.log 2>&1 || rc=$?
+	[ "$rc" -eq 0 ] && "$IGMP" mvlan show >>/tmp/pon-services-command.log 2>&1 || rc=$?
+	if [ "$rc" -eq 0 ]; then
+		echo "$vlan" >/tmp/pon-services-mvlan
+		uci set "pon.multicast.applied_vlan=$vlan"
+		[ -n "$service_vlan" ] && uci set "pon.multicast.applied_service_vlan=$service_vlan"
+		uci set "pon.multicast.applied_port=$port"
+		uci commit pon
+	fi
+	[ "$rc" -eq 0 ] || echo "exit_code=$rc" >>/tmp/pon-services-command.log
+	return "$rc"
+}
+
+apply_vlans() {
+	/etc/init.d/network reload || return $?
+	sleep 1
+	uci show network 2>/dev/null | sed -n "s/^network\.\([^.=]*\)=xpon_service$/\1/p" | while read -r s; do
+		[ "$(uci -q get "network.$s.xpon_managed")" = 1 ] || continue
+		vid=$(uci -q get "network.$s.vlan_id"); pri=$(uci -q get "network.$s.priority"); pri=${pri:-0}
+		[ -d "/sys/class/net/pon.$vid" ] || continue
+		vconfig set_egress_map "pon.$vid" 0 "$pri" >/dev/null 2>&1
+		vconfig set_ingress_map "pon.$vid" 0 "$pri" >/dev/null 2>&1
+	done
+}
+
+start() {
+	# 每条组播 VLAN 独立重放；旧单值配置仅保留兼容，不再作为 UI 数据源。
+	/usr/bin/xpon-bind-lan.sh all >/dev/null 2>&1 &
+	/usr/bin/pon-multicast apply-all
+}
+restart() { apply_vlans && apply_multicast; }
+reload() { restart; }
