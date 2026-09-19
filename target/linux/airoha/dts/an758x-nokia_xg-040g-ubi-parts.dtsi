@@ -4,6 +4,49 @@
 	chosen {
 		rootdisk = <&ubi_fit>;
 	};
+
+	aliases {
+		/* BoB calibration blob consumed by the EN7572 optical frontend */
+		pon-calibration = &pon_calibration;
+	};
+};
+
+/* xPON wiring (clean-room airoha-xpon driver, mirrors the community
+ * XG-040G-TF 6.18 reference DTB). Only meaningful with
+ * kmod-airoha-xpon/kmod-airoha-en7572 loaded manually. */
+&soc {
+	xpon_mac: ethernet@1fb64000 {
+		compatible = "airoha,an7581-xpon-mac";
+		reg = <0x0 0x1fb64000 0x0 0x3e8>,
+		      <0x0 0x1fb65000 0x0 0xff8>,
+		      <0x0 0x1fb66000 0x0 0x1000>,
+		      <0x0 0x1faf0000 0x0 0x2000>;
+		reg-names = "gpon", "xgpon", "epon", "pon-phy";
+		interrupts = <GIC_SPI 42 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 43 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "mac", "phy";
+		pcs-handle = <&pon_pcs>;
+		airoha,scu = <&scuclk>;
+		optical-front-end = <&optical_front_end>;
+		nvmem-cells = <&pon_serial>;
+		nvmem-cell-names = "pon-serial";
+		data-path = <&gdm2>;
+		status = "okay";
+	};
+};
+
+&gdm2 {
+	airoha,pon-data-path;
+};
+
+&i2c0 {
+	optical_front_end: optical-front-end@50 {
+		compatible = "airoha,en7572";
+		reg = <0x50>;
+		tx-disable-gpios = <&en7581_pinctrl 38 GPIO_ACTIVE_HIGH>;
+		nvmem-cells = <&pon_calibration>;
+		nvmem-cell-names = "calibration";
+	};
 };
 
 &partitions {
@@ -27,6 +70,17 @@
 		volumes {
 			ubi-volume-bosa {
 				volname = "bosa";
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					pon_calibration: calibration@2 {
+						reg = <0x2 0x200>;
+					};
+				};
 			};
 
 			ubi-volume-factory {
@@ -37,6 +91,10 @@
 
 					#address-cells = <1>;
 					#size-cells = <1>;
+
+					pon_serial: pon-serial@1a {
+						reg = <0x1a 0xc>;
+					};
 
 					macaddr_factory_3e: macaddr@3e {
 						compatible = "mac-base";
