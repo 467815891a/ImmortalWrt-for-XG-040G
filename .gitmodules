@@ -1,0 +1,7 @@
+[submodule "add/airoha-collection-main"]
+	path = add/airoha-collection-main
+	url = https://github.com/Yuzhii0718/airoha-collection.git
+	branch = main
+[submodule "add/airoha_sdk"]
+	path = add/airoha_sdk
+	url = https://github.com/naoki66/airoha_sdk.git
