@@ -281,6 +281,30 @@ for _, t in ipairs(v.pon_techs or {}) do
 		</div>
 
 		<div class="cbi-value xpon-gpon-auth">
+			<label class="cbi-value-title" for="hardware_version">硬件版本（可选）</label>
+			<div class="cbi-value-field">
+					<input type="text" id="hardware_version" name="hardware_version" class="cbi-input-text" maxlength="24" value="<%=v.hardware_version or ""%>" placeholder="OLT 经 OMCI 读取的硬件版本" />
+				<div class="cbi-value-description">OMCI ME 256/257 硬件版本属性；当前系统生效：<code><%=esc(rt.hw_version ~= "" and rt.hw_version or "（空）")%></code></div>
+			</div>
+		</div>
+
+		<div class="cbi-value xpon-gpon-auth">
+			<label class="cbi-value-title" for="operator_id">运营商 ID（可选）</label>
+			<div class="cbi-value-field">
+					<input type="text" id="operator_id" name="operator_id" class="cbi-input-text" maxlength="24" value="<%=v.operator_id or ""%>" placeholder="运营商定制标识" />
+				<div class="cbi-value-description">运营商定制身份；当前系统生效：<code><%=esc(rt.operator_id ~= "" and rt.operator_id or "（空）")%></code></div>
+			</div>
+		</div>
+
+		<div class="cbi-value xpon-gpon-auth">
+			<label class="cbi-value-title" for="vendor_id">厂商 ID（可选）</label>
+			<div class="cbi-value-field">
+					<input type="text" id="vendor_id" name="vendor_id" class="cbi-input-text" maxlength="4" value="<%=v.vendor_id or ""%>" placeholder="留空跟随 SN 前 4 字节" pattern="[A-Za-z]{4}" />
+				<div class="cbi-value-description">PLOAM 厂商 ID 由 SN 前 4 字节派生；此处仅作 OMCI 侧记录（当前系统生效：<code><%=esc(rt.vendor_id ~= "" and rt.vendor_id or "（空）")%></code>）</div>
+			</div>
+		</div>
+
+		<div class="cbi-value xpon-gpon-auth">
 			<label class="cbi-value-title" for="omcc_version">OMCC 版本（可选）</label>
 			<div class="cbi-value-field">
 				<input type="text" id="omcc_version" name="omcc_version" class="cbi-input-text" value="<%=v.omcc_version%>" placeholder="自动填充当前系统生效值" />

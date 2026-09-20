@@ -697,6 +697,8 @@ function auth_values()
 	v.vendor_id         = uget("xpon", "device", "vendor_id") or ""
 	v.equipment_id      = uget("network", "xpon_auth", "equipment_id") or uget("xpon", "device", "equipment_id") or ""
 	v.onu_version       = uget("network", "xpon_auth", "onu_version") or uget("xpon", "device", "onu_version") or ""
+	v.hardware_version  = uget("network", "xpon_auth", "hw_version") or uget("xpon", "device", "hw_version") or ""
+	v.operator_id       = uget("network", "xpon_auth", "operator_id") or uget("xpon", "device", "operator_id") or ""
 	v.omcc_version      = uget("network", "xpon_auth", "omcc_version") or uget("xpon", "device", "omcc_version") or ""
 	v.omci_spec_ver     = uget("xpon", "device", "omci_spec_ver") or ""
 	v.epon_oui          = uget("xpon", "device", "epon_oui") or ""
@@ -725,6 +727,8 @@ function auth_values()
 		vendor_id    = is_epon and "" or omci_get("vendorId"),
 		equipment_id = is_epon and "" or omci_get("equipmentId"),
 		onu_version  = is_epon and "" or omci_get("onuVersion"),
+		hw_version   = is_epon and "" or omci_get("hwVersion"),
+		operator_id  = is_epon and "" or omci_get("operatorId"),
 		omcc_version = is_epon and "" or omci_get("omccVersion"),
 		spec_ver     = is_epon and "" or (sh("/userfs/bin/omcicfgCmd get specVer 2>&1"):match("(%d+)") or ""),
 		epon_oui     = is_epon and oam_get("localOui"):gsub("^0[xX]", ""):upper() or "",
@@ -772,6 +776,8 @@ function auth_values()
 	end
 	v.equipment_id  = current_identity_fb("equipment_id", rt.equipment_id, "")
 	v.onu_version   = current_identity_fb("onu_version", rt.onu_version, "")
+	v.hardware_version = current_identity_fb("hw_version", rt.hw_version, "")
+	v.operator_id      = current_identity_fb("operator_id", rt.operator_id, "")
 	v.omcc_version  = current_identity_fb("omcc_version", rt.omcc_version, "")
 	v.omci_spec_ver = current_identity_fb("omci_spec_ver", rt.spec_ver, "")
 	if v.epon_ctc_oui == "" then
@@ -2048,6 +2054,9 @@ local function save_auth(fv)
 	-- OMCI 协议版本（spec_version）：固件存 uint8；omcicfgCmd 用 atoi 解析 -> 统一落库为十进制
 	local equipment_id = (fv("equipment_id") or ""):gsub("^%s+", ""):gsub("%s+$", "")
 	local onu_version = (fv("onu_version") or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	local hardware_version = (fv("hardware_version") or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	local operator_id = (fv("operator_id") or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	local vendor_id = (fv("vendor_id") or ""):gsub("%s+", ""):upper()
 	local omci_spec_ver = (fv("omci_spec_ver") or ""):gsub("%s+", "")
 	local omcc_version = normalize_omccver(fv("omcc_version")) or ""
 	if omci_spec_ver ~= "" then
@@ -2109,6 +2118,9 @@ local function save_auth(fv)
 	else
 		if equipment_id ~= "" then u:set("network", "xpon_auth", "equipment_id", equipment_id) else u:delete("network", "xpon_auth", "equipment_id") end
 		if onu_version ~= "" then u:set("network", "xpon_auth", "onu_version", onu_version) else u:delete("network", "xpon_auth", "onu_version") end
+		if hardware_version ~= "" then u:set("network", "xpon_auth", "hw_version", hardware_version) else u:delete("network", "xpon_auth", "hw_version") end
+		if operator_id ~= "" then u:set("network", "xpon_auth", "operator_id", operator_id) else u:delete("network", "xpon_auth", "operator_id") end
+		if vendor_id ~= "" and #vendor_id == 4 then u:set("network", "xpon_auth", "vendor_id", vendor_id) else u:delete("network", "xpon_auth", "vendor_id") end
 		if omcc_version ~= "" then u:set("network", "xpon_auth", "omcc_version", omcc_version) else u:delete("network", "xpon_auth", "omcc_version") end
 		if gpon_pon_mac ~= "" then u:set("network", "xpon_auth", "gpon_pon_mac", gpon_pon_mac) else u:delete("network", "xpon_auth", "gpon_pon_mac") end
 		u:delete("network", "xpon_auth", "epon_oui")

@@ -25,6 +25,10 @@ define Build/Compile
 		-Wall -Wextra \
 		-o $(PKG_BUILD_DIR)/ponctl-helper \
 		$(CURDIR)/src/ponctl-helper.c
+	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS) $(TARGET_LDFLAGS) \
+		-Wall -Wextra \
+		-o $(PKG_BUILD_DIR)/omcicfgCmd \
+		$(CURDIR)/src/omcicfgCmd.c
 endef
 
 define Package/airoha-pon-manager/install
@@ -35,6 +39,10 @@ define Package/airoha-pon-manager/install
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) ./files/usr/sbin/ponctl $(1)/usr/sbin/ponctl
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ponctl-helper $(1)/usr/sbin/ponctl-helper
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/omcicfgCmd $(1)/usr/bin/omcicfgCmd
+	$(INSTALL_DIR) $(1)/userfs/bin
+	$(LN) /usr/bin/omcicfgCmd $(1)/userfs/bin/omcicfgCmd
 endef
 
 $(eval $(call BuildPackage,airoha-pon-manager))

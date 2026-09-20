@@ -430,6 +430,9 @@ apply_auth() {
 	equipment_val=$(identity_get equipment_id)
 	onuver_val=$(identity_get onu_version)
 	omcc_val=$(identity_get omcc_version)
+	hwver_val=$(identity_get hw_version)
+	swver_val=$(identity_get sw_version)
+	opid_val=$(identity_get operator_id)
 	valid_pon_sn() {
 		[ "${#1}" -eq 12 ] || return 1
 		vpart=${1%????????}
@@ -496,8 +499,11 @@ apply_auth() {
 			[ -n "$equipment_val" ] && $OMCI set equipmentId "$equipment_val" >/dev/null 2>&1
 			[ -n "$onuver_val" ] && $OMCI set onuVersion "$onuver_val" >/dev/null 2>&1
 			[ -n "$omcc_val" ] && $OMCI set omccVersion "$omcc_val" >/dev/null 2>&1
+			[ -n "$hwver_val" ] && $OMCI set hardwareVersion "$hwver_val" >/dev/null 2>&1
+			[ -n "$swver_val" ] && $OMCI set softwareVersion "$swver_val" >/dev/null 2>&1
+			[ -n "$opid_val" ] && $OMCI set operatorId "$opid_val" >/dev/null 2>&1
 			# 记录实际回读值，区分 UCI 保存成功与 OMCI 下发成功。
-			for pair in vendor_id:vendorId equipment_id:equipmentId onu_version:onuVersion omcc_version:omccVersion; do
+			for pair in vendor_id:vendorId equipment_id:equipmentId onu_version:onuVersion omcc_version:omccVersion hw_version:hardwareVersion sw_version:softwareVersion operator_id:operatorId; do
 				uci_attr=${pair%%:*}
 				omci_attr=${pair#*:}
 				want=$(identity_get "$uci_attr")
